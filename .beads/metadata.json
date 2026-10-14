@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "gba_tab5",
+  "project_id": "812cc83a-50ce-4f43-a5b0-e9db11c66a27"
+}
