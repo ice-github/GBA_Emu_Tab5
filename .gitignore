@@ -34,3 +34,4 @@ results/
 !firmware/partitions.csv
 __pycache__/
 *.pyc
+.pytest_cache/
