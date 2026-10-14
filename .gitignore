@@ -31,3 +31,5 @@ backups/
 results/
 *.jsonl
 *.csv
+__pycache__/
+*.pyc
