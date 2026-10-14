@@ -29,12 +29,18 @@ typedef struct {
     const char *id;      /* stable id, e.g. "memcpy_psram_75k" */
     const char *name;    /* human-readable */
     const char *unit;    /* "ns", "ns/iter", "MB/s" etc (info only) */
+    const char *mem;     /* buffer placement on device: "psram" or "dram" */
     uint32_t warmup_iters;
     uint32_t measure_iters;
-    /* Runs one iteration of `work_items` abstract work units.
-       Returns a checksum that must be consumed via bench_sink. */
+    /* Timed work. Returns an O(1) token derived from the result; the
+       harness consumes it via bench_sink so the work cannot be deleted,
+       but no full checksum runs inside the timed region. */
     uint32_t (*run)(uint32_t work_items);
-    uint32_t work_items; /* work units per iteration (bytes, pixels, ops) */
+    /* Untimed verification. Runs the full work plus a checksum and
+       returns it. Called twice; equality is required for "verified". */
+    uint32_t (*verify)(uint32_t work_items);
+    uint32_t work_items; /* throughput basis: ACTUAL bytes/ops performed,
+                            not the address span touched */
 } bench_case_t;
 
 typedef struct {

@@ -7,7 +7,6 @@
 
 #define DISPATCH_OPS 4096
 static uint8_t s_ops[DISPATCH_OPS];
-static uint32_t s_regs[16];
 
 static uint32_t s_branch_init_done;
 
@@ -26,7 +25,10 @@ static void branch_data_init(void) {
 
 static uint32_t run_dispatch(uint32_t ops) {
     if (ops > DISPATCH_OPS) ops = DISPATCH_OPS;
-    uint32_t r0 = s_regs[0], r1 = s_regs[1], r2 = s_regs[2], r3 = s_regs[3];
+    /* Fixed seeds per call: no accumulated state, so repeated calls with
+       the same input produce the same token (verifiable). */
+    uint32_t r0 = 0x12345678u, r1 = 0x9e3779b9u, r2 = 0x85ebca6bu,
+             r3 = 0x27d4eb2du;
     for (uint32_t i = 0; i < ops; i++) {
         switch (s_ops[i]) {
             case 0: r0 += r1 + (uint32_t)i; break;
@@ -47,27 +49,38 @@ static uint32_t run_dispatch(uint32_t ops) {
             default: r3 ^= (uint32_t)i + r0; break;
         }
     }
-    s_regs[0] = r0;
-    s_regs[1] = r1;
-    s_regs[2] = r2;
-    s_regs[3] = r3;
     return r0 ^ r1 ^ r2 ^ r3;
 }
 
-/* Memory-map-like workload: masked address decode per access. */
+/* Memory-map-like workload: masked address decode per access, cycling
+   EWRAM/IWRAM/palette/VRAM/ROM-ish regions like a real GBA bus map. */
 static EXT_RAM_BSS_ATTR uint8_t s_mapmem[64 * 1024];
+
+static const uint32_t kMapBases[] = {
+    0x02000000u, /* EWRAM 256K */
+    0x03000000u, /* IWRAM 32K */
+    0x05000000u, /* palette 1K */
+    0x06000000u, /* VRAM 96K */
+    0x08000000u, /* ROM */
+};
+static const uint32_t kMapMasks[] = {
+    0x3ffffu, 0x7fffu, 0x3ffu, 0x1ffffu, 0x1ffffffu,
+};
+#define MAP_REGIONS \
+    (sizeof(kMapBases) / sizeof(kMapBases[0]))
 
 static uint32_t run_map_decode(uint32_t ops) {
     if (ops > 8192) ops = 8192;
     uint32_t acc = 0;
     for (uint32_t i = 0; i < ops; i++) {
-        uint32_t addr = 0x02000000u + ((i * 2654435761u) & 0x007fffffu);
+        uint32_t sel = (i * 2654435761u >> 16) % MAP_REGIONS;
+        uint32_t addr = kMapBases[sel] + ((i * 40503u) & kMapMasks[sel]);
         uint32_t region = (addr >> 24) & 0x0fu;
         uint32_t off;
         switch (region) {
             case 0x2: off = addr & 0x3ffffu; break;      /* EWRAM 256K */
-            case 0x3: off = (addr & 0x7fffu) + 0x40000u; break; /* IWRAM 32K */
-            case 0x6: off = (addr & 0x17fffu) + 0x48000u; break; /* VRAM-ish */
+            case 0x3: off = (addr & 0x7fffu) + 0x40000u; break; /* IWRAM */
+            case 0x6: off = (addr & 0x17fffu) + 0x48000u; break; /* VRAM */
             default: off = (addr & 0xffffu); break;
         }
         acc += s_mapmem[off & (sizeof(s_mapmem) - 1)] + (uint8_t)i;
@@ -76,10 +89,10 @@ static uint32_t run_map_decode(uint32_t ops) {
 }
 
 static const bench_case_t kCases[] = {
-    {"dispatch_4k", "16-way dispatch over 4k ops", "ops/s", 10, 100,
-     run_dispatch, DISPATCH_OPS},
-    {"map_decode_8k", "masked region decode over 8k accesses", "ops/s", 10,
-     100, run_map_decode, 8192},
+    {"dispatch_4k", "16-way dispatch over 4k ops", "ops/s", "dram", 10, 100,
+     run_dispatch, run_dispatch, DISPATCH_OPS},
+    {"map_decode_8k", "region decode over 8k accesses, 5 regions", "ops/s",
+     "psram", 10, 100, run_map_decode, run_map_decode, 8192},
 };
 
 void bench_cases_branch_register(void) {

@@ -100,34 +100,42 @@ void bench_run_all(bench_emit_fn emit, void *ctx, const char *device,
         static uint64_t samples[BENCH_MAX_SAMPLES];
         uint32_t n = c->measure_iters < BENCH_MAX_SAMPLES ? c->measure_iters
                                                           : BENCH_MAX_SAMPLES;
-        uint32_t checksum = 0;
+        uint32_t token = 0;
         for (uint32_t i = 0; i < n; i++) {
             uint64_t t0 = bench_now_ns();
-            uint32_t cs = c->run(c->work_items);
+            uint32_t tok = c->run(c->work_items);
             uint64_t t1 = bench_now_ns();
             samples[i] = t1 - t0;
-            /* Wrapping add: xor of identical per-iter values cancels out
-               for even n, so mix instead. */
-            checksum = checksum * 1000003u + cs + i;
+            /* Mix tokens so identical per-iter values cannot cancel out
+               (xor would vanish for even n). */
+            token = token * 1000003u + tok + i;
         }
+        bench_sink(&token, sizeof(token));
+        /* Untimed verification, twice: determinism is required. */
+        uint32_t v0 = c->verify(c->work_items);
+        uint32_t v1 = c->verify(c->work_items);
+        int verified = (v0 == v1);
         bench_result_t r;
         memset(&r, 0, sizeof(r));
         r.case_id = c->id;
-        r.checksum = checksum;
+        r.checksum = v0;
         bench_stats(samples, n, c->work_items, &r);
-        /* Sanity: zero-time or zero-checksum runs are failures, but we still
-           emit them so the runner can reject them explicitly. */
+        /* Sanity: zero-time runs are failures, but we still emit them so
+           the runner can reject them explicitly. */
         int nch = snprintf(line, sizeof(line),
                            "{\"device\":\"%s\",\"config\":\"%s\","
                            "\"git_rev\":\"%s\",\"core_rev\":\"%s\","
-                           "\"case\":\"%s\",\"iters\":%" PRIu32 ","
+                           "\"case\":\"%s\",\"mem\":\"%s\","
+                           "\"iters\":%" PRIu32 ","
                            "\"avg_ns\":%.1f,\"med_ns\":%.1f,"
                            "\"p95_ns\":%.1f,\"p99_ns\":%.1f,\"max_ns\":%.1f,"
                            "\"work_per_s\":%.1f,\"checksum\":\"%08" PRIX32
-                           "\"}",
-                           device, config, git_rev, core_rev, c->id, r.iters,
+                           "\",\"verified\":%s}",
+                           device, config, git_rev, core_rev, c->id, c->mem,
+                           r.iters,
                            r.avg_ns, r.med_ns, r.p95_ns, r.p99_ns, r.max_ns,
-                           r.work_per_s, r.checksum);
+                           r.work_per_s, r.checksum,
+                           verified ? "true" : "false");
         if (nch > 0 && (size_t)nch < sizeof(line)) emit(line, ctx);
     }
 }

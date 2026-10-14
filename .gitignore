@@ -15,20 +15,21 @@ firmware/build/
 firmware/sdkconfig
 firmware/sdkconfig.old
 host/bench_host
+host/gba-smoke
 
-# User-provided console assets: never commit
-roms/
+# User-provided console assets: never commit (repo-root dirs only)
+/roms/
 *.gba
 *.gbc
 *.gb
-bios/
+/bios/
 *.bin
-backups/
+/backups/
 *.elf
 *.map
 
 # Local measurement artifacts
-results/
+/results/
 *.jsonl
 *.csv
 !firmware/partitions.csv

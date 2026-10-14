@@ -21,16 +21,16 @@ bench_host: $(BENCH_SRCS)
 #     -DBUILD_LIBRETRO=OFF -DUSE_FFMPEG=OFF -DUSE_LUA=OFF -DUSE_SQLITE3=OFF
 MGBA_BUILD ?= /tmp/opencode/mgba-host
 
-smoke: host/gba-smoke.c
+smoke: gba-smoke.c
 	$(CC) $(CFLAGS) -I$(ROOT)/third_party/mgba/include \
-	  -I$(MGBA_BUILD)/include -o /tmp/opencode/gba-smoke \
-	  host/gba-smoke.c -L$(MGBA_BUILD) -lmgba \
+	  -I$(MGBA_BUILD)/include -o gba-smoke \
+	  gba-smoke.c -L$(MGBA_BUILD) -lmgba \
 	  -Wl,-rpath,$(MGBA_BUILD)
 
 check: bench_host
 	./bench_host --config=host-check --git-rev=local | python3 $(ROOT)/tools/bench/validate.py
 
 clean:
-	rm -f bench_host
+	rm -f bench_host gba-smoke
 
 .PHONY: all check clean

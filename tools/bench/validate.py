@@ -1,14 +1,26 @@
-"""Validate bench JSONL: schema, sanity, and no silent success on bad runs."""
+"""Validate bench JSONL: schema, sanity, determinism, finite stats.
+
+Rejects: missing keys, iters<1, non-finite or misordered stats,
+non-positive throughput, verified!=true, duplicate case ids, empty input.
+A zero checksum is NOT rejected on its own: legit workloads can hash to
+zero. Determinism is proven by the harness "verified" flag instead.
+"""
 import json
+import math
 import sys
 
-REQUIRED = ["device", "config", "git_rev", "core_rev", "case", "iters",
-            "avg_ns", "med_ns", "p95_ns", "p99_ns", "max_ns", "work_per_s",
-            "checksum"]
+REQUIRED = ["device", "config", "git_rev", "core_rev", "case", "mem",
+            "iters", "avg_ns", "med_ns", "p95_ns", "p99_ns", "max_ns",
+            "work_per_s", "checksum", "verified"]
+
+
+def finite(x):
+    return isinstance(x, (int, float)) and math.isfinite(x)
 
 
 def main(path=None):
     fh = open(path) if path else sys.stdin
+    seen = set()
     n = 0
     for lineno, line in enumerate(fh, 1):
         line = line.strip()
@@ -23,20 +35,29 @@ def main(path=None):
             if k not in r:
                 print(f"line {lineno}: missing key {k}", file=sys.stderr)
                 return 1
-        if r["iters"] < 1:
-            print(f"line {lineno}: iters<1", file=sys.stderr)
+        case = r["case"]
+        if case in seen:
+            print(f"line {lineno}: duplicate case {case!r}", file=sys.stderr)
             return 1
-        if not (r["avg_ns"] > 0 and r["max_ns"] >= r["med_ns"] >= 0):
-            print(f"line {lineno}: bad timing stats", file=sys.stderr)
+        seen.add(case)
+        if not isinstance(r["iters"], int) or r["iters"] < 1:
+            print(f"line {lineno}: bad iters", file=sys.stderr)
             return 1
-        if not (r["p95_ns"] >= r["med_ns"] and r["max_ns"] >= r["p95_ns"]):
-            print(f"line {lineno}: bad percentile order", file=sys.stderr)
-            return 1
-        if r["checksum"] == "00000000":
-            print(f"line {lineno}: zero checksum = dead code?", file=sys.stderr)
+        for k in ("avg_ns", "med_ns", "p95_ns", "p99_ns", "max_ns",
+                  "work_per_s"):
+            if not finite(r[k]):
+                print(f"line {lineno}: non-finite {k}", file=sys.stderr)
+                return 1
+        if not (r["avg_ns"] > 0 and r["max_ns"] >= r["p99_ns"] >=
+                r["p95_ns"] >= r["med_ns"] >= 0):
+            print(f"line {lineno}: bad stat order", file=sys.stderr)
             return 1
         if r["work_per_s"] <= 0:
             print(f"line {lineno}: non-positive throughput", file=sys.stderr)
+            return 1
+        if r["verified"] is not True:
+            print(f"line {lineno}: not verified (nondeterministic?)",
+                  file=sys.stderr)
             return 1
         n += 1
     if n == 0:
