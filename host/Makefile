@@ -27,10 +27,21 @@ smoke: gba-smoke.c
 	  gba-smoke.c -L$(MGBA_BUILD) -lmgba \
 	  -Wl,-rpath,$(MGBA_BUILD)
 
+# RGB565 smoke: color_t MUST match the core build (uint16_t). The device
+# port uses this configuration; never compare its CRCs with native32.
+MGBA_BUILD_565 ?= /tmp/opencode/mgba-host-565
+
+smoke565: gba-smoke.c
+	$(CC) $(CFLAGS) -DCOLOR_16_BIT -DCOLOR_5_6_5 \
+	  -I$(ROOT)/third_party/mgba/include \
+	  -I$(MGBA_BUILD_565)/include -o gba-smoke-565 \
+	  gba-smoke.c -L$(MGBA_BUILD_565) -lmgba \
+	  -Wl,-rpath,$(MGBA_BUILD_565)
+
 check: bench_host
 	./bench_host --config=host-check --git-rev=local | python3 $(ROOT)/tools/bench/validate.py
 
 clean:
-	rm -f bench_host gba-smoke
+	rm -f bench_host gba-smoke gba-smoke-565
 
 .PHONY: all check clean
