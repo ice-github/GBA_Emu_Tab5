@@ -45,18 +45,17 @@ observing the failure before editing.
 
 ## 3. Reboot-loop triage
 
-- Timestamp `TAB5_XFER_READY`-equivalent markers vs `ESP-ROM` lines. A
-  fixed short period (here ~1s, i.e. READY then ROM immediately) means the
-  firmware itself reboots right after the handshake, not a host problem.
+- Timestamp the firmware's ready/marker line vs `ESP-ROM` lines. A
+  fixed short period means the firmware itself reboots, not a host problem.
 - Suspect any read call that can return "no data, try later" as an
   immediate failure: one early-`return -1` on an empty read turns into an
   error path that calls `esp_restart()`.
-- Unit check that bit this project: `esp_timer_get_time()` returns
+- Unit check that bit the source project: `esp_timer_get_time()` returns
   **microseconds**. A `120 * 1000` "millisecond" deadline is 120ms, not
   120s. Write the unit in a comment (`/* 120 s */`) and re-read the
   arithmetic on every deadline.
-- Gate: READY must stay up with no host input for longer than one
-  deadline period before blaming the host.
+- Gate: the ready marker must stay up with no host input for longer than
+  one deadline period before blaming the host.
 
 ## 4. USB-Serial-JTAG RX: use the driver API directly, never VFS fread
 
@@ -114,45 +113,36 @@ observing the failure before editing.
 - Gate: `grep CONFIG_FATFS_LFN <build>/../sdkconfig` (or the firmware
   `sdkconfig`) shows the intended setting after a clean regenerate.
 
-## 7. Watchdog during bulk transfer
+## 7. Watchdog during bulk I/O
 
 - Tight poll loops and bulk SD writes starve the idle task and trip the
-  task watchdog (IDLE0/IDLE1). Distinguish "transfer phase" (not
-  real-time; watchdog handling belongs here) from "playback phase"
-  (real-time; feed with `esp_task_wdt_reset()` in the loop).
+  task watchdog (IDLE0/IDLE1). Distinguish a non-real-time transfer/load
+  phase from a real-time emulation/playback phase
+  (feed with `esp_task_wdt_reset()` in the loop only after confirming the
+  backtrace).
 - Do not cargo-cult watchdog changes: confirm the watchdog backtrace
-  names the transfer path before adjusting.
-- Gate: multi-MB transfer completes with no `task_wdt` lines in the log.
+  names the busy path before adjusting.
+- Gate: multi-MB I/O completes with no `task_wdt` lines in the log.
 
-## 8. Player performance: measure stages, fix the real bottleneck
+## 8. Frame-loop performance: measure stages, fix the real bottleneck
 
-- Instrument the frame loop with per-stage averages (SD read / JPEG
-  decode / draw) reported every N frames. On this project: read 24ms,
-  decode 9ms, draw ~0ms — yet fps stayed 23.5 after killing the read.
-- Lesson: the video clock matters more than stage times. `target` derives
-  from an audio-sample counter updated only when the blocking audio write
-  returns; 8KB chunks updated it every ~43ms and quantized video to
-  23fps regardless of decode speed.
-- Fixes that worked, in order:
-  1. Preload the whole MJPEG (~7MB) into PSRAM at startup; per-frame SD
-     `pread` (~24ms) becomes `memcpy` (~0ms).
-  2. Shrink audio chunks to 1920B (480 frames = 10.0ms @48kHz) so the
-     audio clock updates faster than the 33ms frame budget.
-- Result: 30.0fps, skip=0, decode 9ms/frame. Gate: `skip=0` sustained,
-  not just average fps.
+Source-project lesson (video player, not GBA): per-stage averages alone
+misled; the video clock derived from blocking audio writes quantized output.
+Keep the method (per-stage avg/p95/max, `skip`/deadline-miss counters), but
+do not carry over the player's MJPEG/audio-chunk numbers as GBA targets.
 
-## 9. Host sender discipline
+## 9. Host I/O discipline (only if a device transfer protocol exists)
 
 - Log every device line (`[dev] ...`) but match protocol lines by prefix;
-  boot logs share the same wire as the protocol.
+  boot logs may share the same wire as the protocol.
 - `expect()` helper: wait for a line with a wanted prefix, log the rest,
   and abort on too many consecutive empty reads (peer likely dead) rather
   than hanging forever.
-- READY is single-shot per boot: if the host connects mid-cycle it waits
-  until the next rx-deadline reboot (~120s here) before seeing READY.
-  For iteration, re-print READY as a heartbeat every few seconds until
-  the first FILE header arrives; on the host, keep listening instead of
-  assuming the device is dead after one missed READY.
+- A single-shot ready marker is a rendezvous race: if the host connects
+  mid-cycle it can miss it. For iteration, re-print the ready marker as a
+  heartbeat every few seconds until the first host command arrives; on the
+  host, keep listening instead of assuming the device is dead after one
+  missed marker.
 - Before debugging "weird" behavior, clean-rebuild (`rm -rf build`) and
   reflash: ninja reuse can leave a stale `app_desc` timestamp that looks
   like the new firmware but is not.
@@ -160,17 +150,17 @@ observing the failure before editing.
   and "transfer advancing" are distinguishable. A live process with no
   chunk progress is stuck, not slow.
 - Verify by re-reading the written file on-device and comparing CRC
-  before reporting success.
-- Gate: sender output shows monotonic chunk progress; final `OK <CRC>`
-  per file plus `COMPLETE`.
+  before reporting success, where the project defines file transfer.
+- Gate: host output shows monotonic progress; final per-file CRC plus an
+  explicit completion marker.
 
 ## 10. Tab5 display init (MIPI-DSI, ILI9881C)
 
 - `bsp_display_new()` with a zeroed `bsp_display_config_t` aborts: DSI
   `lane_bit_rate_mbps` 0 is invalid. Pass the board macro explicitly
-  (`firmware/main/main.c:327-333`):
+  (source project: `firmware/main/main.c`):
   `lane_bit_rate_mbps = BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS` (1000 = 1Gbps),
   `phy_clk_src = 0` (driver default).
-- Symptom that points here: transfer COMPLETE and CRC-OK, then a reboot
-  every few seconds in player mode right after display init.
-- Gate: player reaches backlight-on with no abort after transfer.
+- Symptom seen in the source project: transfer completed and CRCs were OK,
+  then reboot every few seconds right after display init.
+- Gate: firmware reaches backlight-on with no abort after init.

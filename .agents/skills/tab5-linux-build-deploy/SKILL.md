@@ -1,6 +1,6 @@
 ---
 name: tab5-linux-build-deploy
-description: Use when building or flashing the Tab5 firmware on a real Linux machine (not WSL): setting up ESP-IDF without sudo, identifying the ESP32-P4 device, backing up flash, configuring the chip-revision range, building, flashing, and verifying boot/playback. Trigger when the user asks to set up the build environment, compile, flash, or deploy to the Tab5.
+description: Use when building or flashing the Tab5 firmware on a real Linux machine (not WSL): setting up ESP-IDF without sudo, identifying the ESP32-P4 device, backing up flash, configuring the chip-revision range, building, flashing, and verifying boot. Trigger when the user asks to set up the build environment, compile, flash, or deploy to the Tab5.
 ---
 
 # Tab5 Linux Build & Deploy (real Linux, ESP-IDF v5.5.x)
@@ -55,8 +55,8 @@ riscv32-esp-elf-gcc --version              # esp-14.2.0
 python --version                           # 3.12.x inside the env
 ```
 
-Host self-test gate: `~/.venv-tab5-host/bin/python
-tools/test_send_bundle.py` prints `all self-tests passed`.
+Host self-test gate: project host tests under `host/` / `tools/bench/`
+must pass before flashing (see `docs/development.md`).
 
 ## 3. Identify the device, preserve flash (before any write)
 
@@ -78,10 +78,10 @@ python -m esptool --port "$PORT" --baud 921600 \
   read-flash 0x0 0x1000000 backups/tab5-stock-<date>.bin
 ```
 
-- Capture the boot log: existing bundle -> `player start`; missing
-  bundle/flag -> single-shot `TAB5_XFER_READY`. Note: without SD or with
-  an unreadable card the firmware reboots in a loop — fix the card, never
-  auto-format (`CONFIG_BSP_SD_FORMAT_ON_MOUNT_FAIL` stays off).
+- Capture the boot log and confirm this build's banner/version line,
+  PSRAM init, and expected mode entry. Note: without SD or with
+  an unreadable card the firmware must fail safe and report the condition —
+  never auto-format (`CONFIG_BSP_SD_FORMAT_ON_MOUNT_FAIL` stays off).
 - Gate: chip + revision + flash size known, backup stored, or stop with
   the reason before flashing.
 
@@ -111,10 +111,9 @@ See `esp32-p4-bringup` §1 for the revision rationale.
 . ~/esp/esp-idf-v5.5.4/export.sh && idf.py -C firmware build
 ```
 
-Gate: exit 0, app `tab5_player.bin` fits the `factory 0x3F0000`
-partition (known-good: ~650KB, 84% free), bootloader/app revision range
-covers the probed chip, no `--force` anywhere. Record `.elf`/`.bin`
-SHA-256 + sdkconfig + lockfile + source revision per build.
+Gate: exit 0, app binary fits its factory partition, bootloader/app
+revision range covers the probed chip, no `--force` anywhere. Record
+`.elf`/`.bin` SHA-256 + sdkconfig + lockfile + source revision per build.
 
 ## 6. Flash + boot (separate steps, first time)
 
@@ -127,18 +126,12 @@ Rules: no `erase-flash` in the normal path, no manual offsets, never run
 monitor and the sender at once, re-check cable/port-ownership/permissions
 before asking for BOOT/RESET button help.
 
-Boot gate: this build's `tab5player build <date>` line, PSRAM init, SD
-mount at HIGHSPEED, `player start` (or `TAB5_XFER_READY`), prefetch
-primed, no panic/watchdog/reboot loop.
+Boot gate: this build's banner/version line, PSRAM init, expected mode
+entry, no panic/watchdog/reboot loop. Display/audio/touch appearance needs
+human eyes where applicable.
 
-Playback gate (existing bundle): ~30fps sustained, `skip` stagnant,
-`underrun=0` across the sample window, OSD pause/resume/brightness/
-SCREEN OFF working. Screen/audio/touch appearance needs human eyes.
+## 7. Data transfer (only when the project defines one)
 
-## 7. New bundle transfer (separate from flashing, only when needed)
-
-Prefer the existing SD content. For a new bundle: verify on the PC
-first (`tab5-media-bundle`), enter transfer mode (fresh boot without the
-`complete` flag, or OSD `REPLACE` after confirming the old content may
-go), stop the monitor, then send from the host venv and require per-file
-`OK <CRC>` + final `COMPLETE` before reporting success.
+If a data-transfer mode exists, document its protocol, per-file CRC, and
+completion marker separately. Do not reuse the old video-bundle protocol
+unless this project explicitly adopts it.

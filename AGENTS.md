@@ -25,12 +25,16 @@ bd remember "... "    # Persist project knowledge
 - Use `bd remember` for persistent knowledge; do not create MEMORY.md files.
 - Do not commit or push without the explicit user request or an applicable
   opt-in profile; this repo's automated-session default is conservative.
-- `firmware/` does not exist yet. Do not claim a build is valid against a
-  project that has not been created or changed in this repository.
+- `firmware/` is a bench-app skeleton (M1), not yet built or run on
+  device. Do not claim device results until M2 measures them.
+- ROMs, BIOS images, flash backups, and measurement artifacts are never
+  committed. See `.gitignore`.
 
 ## Documentation
 
 - `docs/gba-context.md` — purpose and unknowns
+- `docs/core-survey.md` — mGBA/gpSP portability and license survey
+- `docs/emulator-adapter.md` — thin core boundary (draft)
 - `docs/tab5-hardware.md` — Tab5 hardware facts/provenance
 - `docs/development.md` — Linux-first environment workflow
 - `docs/troubleshooting.md` — proven failure modes

@@ -12,8 +12,8 @@ that hardware behavior from a previous project transfers unchanged.
 - No emulator or GBA-specific design is present in this repository.
 - No `firmware/`, no build system, no source tree.
 - Task tracking is in beads; durable knowledge is in `bd remember`.
-- Reusable Tab5 knowledge is in `docs/` and the reusable portions of
-  `.agents/skills/` (Tab5 env, bring-up, media bundle).
+- Reusable Tab5 knowledge is in `docs/` and `.agents/skills/`
+  (`tab5-linux-build-deploy`, `esp32-p4-bringup`, `beads`).
 
 ## Known unknowns (to investigate)
 

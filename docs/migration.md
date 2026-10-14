@@ -29,9 +29,10 @@ The following searches were performed without matches:
 - `bd memories` (16 prefixes) search.
 - `git log --all --oneline` for beams with GBA wording.
 
-Conclusion: no GBA-specific design notes, plans, tasks, or history were found. A
-follow-up recovery task is left open in Beads to search chat exports or other
-locations.
+Conclusion: no GBA-specific design notes, plans, tasks, or history were found
+in the searched range. Recovery was recorded as `gba-tab5-2o2.4`; that task
+is closed as "not found", and any later recovery must open a new task rather
+than rewriting this result.
 
 ## Transferred as facts
 
@@ -63,7 +64,7 @@ locations.
 
 ## Notes on extracted lessons
 
-- Beads KD funds via `bd remember` are re-created selectively in this project.
+- Beads knowledge via `bd remember` was re-created selectively in this project.
   Some prior bullets, such as "`TAB5_BL_PWM_FIX`", are referenced directly in
   the prior flash image/temporary logs; some of that may have been removed from
   the final firmware, so the reported behavior's persistence is a property of

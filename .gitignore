@@ -5,3 +5,29 @@
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# ESP-IDF / build outputs
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+host/bench_host
+
+# User-provided console assets: never commit
+roms/
+*.gba
+*.gbc
+*.gb
+bios/
+*.bin
+backups/
+*.elf
+*.map
+
+# Local measurement artifacts
+results/
+*.jsonl
+*.csv

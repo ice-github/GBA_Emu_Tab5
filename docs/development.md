@@ -1,7 +1,7 @@
 # Development workflow for Tab5 (Linux first, reusable knowledge)
 
-Do not build a firmware project here yet — none exists. These steps apply
-once `firmware/` is introduced in a later change set.
+`firmware/` is a bench-app skeleton (M1). Host bench runs today;
+device build/run lands in M2. Steps below apply to both.
 
 ## 1. Operating model
 
@@ -9,7 +9,7 @@ once `firmware/` is introduced in a later change set.
   access.
 - Use ESP-IDF **v5.5.4** with ESP32-P4 target.
 - User-space toolchain preferred; never touch OS Python/CMake.
-- PSDN licenses/tools live outside the repository.
+- User-provided ROM/BIOS, backups, and measurement artifacts live outside git.
 
 ## 2. User-space toolchain layout (from verified run)
 
@@ -22,9 +22,9 @@ once `firmware/` is introduced in a later change set.
 | Flash backups | `backups/` (git-ignored) |
 | Run logs | outside the repository |
 
-Build Python 3.12 is required because the distro may ship 3.14; export
-`IDF_TOOLS_PATH` using a shim dir with `python3 -> uv python 3.12` before
-running `install.sh esp32p4`.
+Build Python 3.12 is required because the distro may ship 3.14; put a shim
+dir first on `PATH` with `python3 -> uv python 3.12` before running
+`install.sh esp32p4`.
 
 ## 3. Linux permissions
 
