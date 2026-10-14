@@ -41,6 +41,18 @@ void bench_register(const bench_case_t *c) {
     if (s_ncases < BENCH_MAX_CASES) s_cases[s_ncases++] = c;
 }
 
+/* Per-file registration entry points (defined in cases_*.c). */
+void bench_cases_mem_register(void);
+void bench_cases_branch_register(void);
+void bench_cases_pixel_register(void);
+
+void bench_register_all(void) {
+    s_ncases = 0;
+    bench_cases_mem_register();
+    bench_cases_branch_register();
+    bench_cases_pixel_register();
+}
+
 static int cmp_u64(const void *a, const void *b) {
     uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
     return (x > y) - (x < y);

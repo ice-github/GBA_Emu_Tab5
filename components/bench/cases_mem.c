@@ -2,10 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Buffers sized for one GBA frame plus headroom; allocated statically so the
-   firmware path never measures malloc. Host uses the same objects. */
-static unsigned char s_src[128 * 1024];
-static unsigned char s_dst[128 * 1024];
+/* Buffers sized for one GBA frame plus headroom. On device these live in
+   PSRAM (EXT_RAM_BSS_ATTR): ~1MB total does not fit internal DRAM. */
+static EXT_RAM_BSS_ATTR unsigned char s_src[128 * 1024];
+static EXT_RAM_BSS_ATTR unsigned char s_dst[128 * 1024];
 
 static void prng_fill(unsigned char *p, size_t n, uint32_t seed) {
     uint32_t x = seed ? seed : 0x9e3779b9u;
@@ -62,7 +62,7 @@ static const bench_case_t kCases[] = {
      run_strided_read, BENCH_GBA_FRAME_BYTES},
 };
 
-__attribute__((constructor)) static void bench_mem_ctor(void) {
+void bench_cases_mem_register(void) {
     prng_fill(s_src, sizeof(s_src), 0xabcdef01u);
     memset(s_dst, 0, sizeof(s_dst));
     for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++)

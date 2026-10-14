@@ -14,6 +14,7 @@ int main(int argc, char **argv) {
         if (strncmp(argv[i], "--config=", 9) == 0) config = argv[i] + 9;
         if (strncmp(argv[i], "--git-rev=", 10) == 0) git_rev = argv[i] + 10;
     }
+    bench_register_all();
     bench_run_all(emit_stdout, NULL, "host", config, git_rev, "none");
     return 0;
 }

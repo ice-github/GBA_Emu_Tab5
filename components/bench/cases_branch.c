@@ -9,13 +9,18 @@
 static uint8_t s_ops[DISPATCH_OPS];
 static uint32_t s_regs[16];
 
-__attribute__((constructor)) static void dispatch_init(void) {
-    uint32_t x = 0x243f6a88u;
-    for (int i = 0; i < DISPATCH_OPS; i++) {
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        s_ops[i] = (uint8_t)(x & 15u);
+static uint32_t s_branch_init_done;
+
+static void branch_data_init(void) {
+    if (!s_branch_init_done) {
+        uint32_t x = 0x243f6a88u;
+        for (int i = 0; i < DISPATCH_OPS; i++) {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            s_ops[i] = (uint8_t)(x & 15u);
+        }
+        s_branch_init_done = 1;
     }
 }
 
@@ -50,7 +55,7 @@ static uint32_t run_dispatch(uint32_t ops) {
 }
 
 /* Memory-map-like workload: masked address decode per access. */
-static uint8_t s_mapmem[64 * 1024];
+static EXT_RAM_BSS_ATTR uint8_t s_mapmem[64 * 1024];
 
 static uint32_t run_map_decode(uint32_t ops) {
     if (ops > 8192) ops = 8192;
@@ -77,7 +82,8 @@ static const bench_case_t kCases[] = {
      100, run_map_decode, 8192},
 };
 
-__attribute__((constructor)) static void bench_branch_ctor(void) {
+void bench_cases_branch_register(void) {
+    branch_data_init();
     for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++)
         bench_register(&kCases[i]);
 }

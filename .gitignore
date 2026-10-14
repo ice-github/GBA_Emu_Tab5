@@ -31,5 +31,6 @@ backups/
 results/
 *.jsonl
 *.csv
+!firmware/partitions.csv
 __pycache__/
 *.pyc

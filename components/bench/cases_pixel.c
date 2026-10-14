@@ -5,11 +5,12 @@
 /* GBA-sized pixel workloads, RGB565. No display hardware touched here;
    display-path cost is measured on device in M2. */
 
-static uint16_t s_frame[BENCH_GBA_PIXELS];
-static uint16_t s_frame2[BENCH_GBA_PIXELS];
-static uint16_t s_out2x[(BENCH_GBA_W * 2) * (BENCH_GBA_H * 2)];
+static EXT_RAM_BSS_ATTR uint16_t s_frame[BENCH_GBA_PIXELS];
+static EXT_RAM_BSS_ATTR uint16_t s_frame2[BENCH_GBA_PIXELS];
+static EXT_RAM_BSS_ATTR uint16_t s_out2x[(BENCH_GBA_W * 2) *
+                                         (BENCH_GBA_H * 2)];
 
-__attribute__((constructor)) static void pixel_init(void) {
+static void pixel_data_init(void) {
     for (uint32_t i = 0; i < BENCH_GBA_PIXELS; i++) {
         uint32_t x = i * 2654435761u + 0x85ebca6bu;
         x ^= x >> 13;
@@ -47,7 +48,7 @@ static uint32_t run_scale2x_nearest(uint32_t pixels) {
 }
 
 /* RGB565 -> XRGB8888 expansion, a common upload-path cost. */
-static uint32_t s_out32[BENCH_GBA_PIXELS];
+static EXT_RAM_BSS_ATTR uint32_t s_out32[BENCH_GBA_PIXELS];
 
 static uint32_t run_rgb565_to_xrgb(uint32_t pixels) {
     if (pixels > BENCH_GBA_PIXELS) pixels = BENCH_GBA_PIXELS;
@@ -72,7 +73,8 @@ static const bench_case_t kCases[] = {
      run_rgb565_to_xrgb, BENCH_GBA_PIXELS},
 };
 
-__attribute__((constructor)) static void bench_pixel_ctor(void) {
+void bench_cases_pixel_register(void) {
+    pixel_data_init();
     for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++)
         bench_register(&kCases[i]);
 }

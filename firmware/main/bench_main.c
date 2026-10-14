@@ -16,6 +16,7 @@ static void emit_console(const char *line, void *ctx) {
 
 void app_main(void) {
     ESP_LOGI(TAG, "gba_bench start (rom-independent)");
+    bench_register_all();
     bench_run_all(emit_console, NULL, "tab5", "idf-default", "local",
                   "none");
     ESP_LOGI(TAG, "gba_bench done; idling");

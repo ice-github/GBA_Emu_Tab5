@@ -2,6 +2,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(ESP_PLATFORM)
+#include "esp_attr.h" /* EXT_RAM_BSS_ATTR for large bench buffers */
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -46,6 +52,9 @@ typedef struct {
 /* Runs all registered cases, emitting one JSON object per line via `emit`. */
 typedef void (*bench_emit_fn)(const char *json_line, void *ctx);
 void bench_register(const bench_case_t *c);
+/* Explicit registration: static-library constructors are dropped by
+   --gc-sections, so both mains must call this before bench_run_all. */
+void bench_register_all(void);
 void bench_run_all(bench_emit_fn emit, void *ctx,
                    const char *device, const char *config,
                    const char *git_rev, const char *core_rev);
