@@ -1,6 +1,6 @@
 /* gba-smoke: run a GBA ROM headless for N frames with fixed input.
  * Prints one JSON line per sampled frame:
- *   {"frame":N,"fb_crc32":"........","audio_frames":M,"audio_crc32":"........"}
+ *   {"frame":N,"fb_crc32":"........"}
  * plus a final summary line. Core execution time and CRC time are measured
  * separately ("run_ns_total" vs "crc_ns_total") so hashing never pollutes
  * the emulation throughput number.
@@ -33,21 +33,14 @@ static uint64_t now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
 }
 
-/* Minimal AV sink: counts audio samples and folds them into a checksum.
-   No storage, no playback — generation cost is measured, not output. */
-struct smoke_av {
-    struct mAVStream d;
-    uint64_t audio_frames;
-    uint32_t audio_crc;
-};
-
-static void smoke_post_audio(struct mAVStream* stream, int16_t left,
-                             int16_t right) {
-    struct smoke_av* av = (struct smoke_av*)stream;
-    uint32_t pair = ((uint32_t)(uint16_t)left << 16) | (uint16_t)right;
-    av->audio_crc ^= pair + 0x9e3779b9u + (av->audio_crc << 6) +
-                     (av->audio_crc >> 2);
-    av->audio_frames++;
+static void discard_mgba_log(struct mLogger* logger, int category,
+                             enum mLogLevel level, const char* format,
+                             va_list args) {
+    (void)logger;
+    (void)category;
+    (void)level;
+    (void)format;
+    (void)args;
 }
 
 int main(int argc, char** argv) {
@@ -72,9 +65,8 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    struct mStandardLogger logger;
-    mStandardLoggerInit(&logger);
-    mLogSetDefaultLogger(&logger.d);
+    struct mLogger logger = {.log = discard_mgba_log, .filter = NULL};
+    mLogSetDefaultLogger(&logger);
     struct mCore* core = mCoreFind(argv[1]);
     if (!core) {
         fprintf(stderr, "mCoreFind failed\n");
@@ -86,11 +78,6 @@ int main(int argc, char** argv) {
     mCoreConfigSetDefaultValue(&core->config, "idleOptimization", "remove");
 
     static color_t fb[FB_W * FB_H];
-    struct smoke_av av;
-    memset(&av, 0, sizeof(av));
-    av.d.postAudioFrame = smoke_post_audio;
-    core->setAVStream(core, &av.d);
-
     if (!mCoreLoadFile(core, argv[1])) {
         fprintf(stderr, "load failed: %s\n", argv[1]);
         return 1;
@@ -111,9 +98,7 @@ int main(int argc, char** argv) {
             uint32_t crc = doCrc32(fb, sizeof(fb));
             uint64_t c1 = now_ns();
             crc_ns += c1 - c0;
-            printf("{\"frame\":%ld,\"fb_crc32\":\"%08x\","
-                   "\"audio_frames\":%" PRIu64 ",\"audio_crc32\":\"%08x\"}\n",
-                   f, crc, av.audio_frames, av.audio_crc);
+            printf("{\"frame\":%ld,\"fb_crc32\":\"%08x\"}\n", f, crc);
             fflush(stdout);
         }
     }

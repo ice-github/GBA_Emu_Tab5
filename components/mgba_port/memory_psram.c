@@ -3,12 +3,11 @@
  * Upstream: anonymousMemoryMap() = calloc(1, size).
  * Problem on ESP32-P4: the GBA core maps the whole ROM through here
  * (GBALoadROM keeps `memory->rom` resident), so an 8-16MiB ROM plus
- * EWRAM/IWRAM/VRAM easily exceeds internal DRAM. Route everything through
- * capability-aware heap: prefer PSRAM, fall back to DRAM only if PSRAM is
- * exhausted, and fail loudly (NULL) otherwise — never silently truncate.
+ * EWRAM/IWRAM/VRAM easily exceeds internal DRAM. Route anonymous mappings
+ * to byte-addressable PSRAM only; falling back to internal DRAM can consume
+ * the application's stack budget and still cannot satisfy a large ROM.
+ * Fail loudly instead.
  */
-#include <string.h>
-
 #include <mgba-util/common.h>
 #include <mgba-util/memory.h>
 
@@ -18,14 +17,9 @@
 static const char* TAG = "mgba_port";
 
 void* anonymousMemoryMap(size_t size) {
-    void* p = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM);
+    void* p = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!p) {
-        ESP_LOGW(TAG, "PSRAM exhausted for %u bytes, trying DRAM",
-                 (unsigned)size);
-        p = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL);
-    }
-    if (!p) {
-        ESP_LOGE(TAG, "out of memory for %u bytes", (unsigned)size);
+        ESP_LOGE(TAG, "PSRAM allocation failed for %u bytes", (unsigned)size);
     }
     return p;
 }

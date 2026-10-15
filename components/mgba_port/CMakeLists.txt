@@ -133,17 +133,20 @@ idf_component_register(SRCS ${MGBA_SRCS}
 # "gba/cheats/gameshark.h" (rooted at src/).
 target_include_directories(${COMPONENT_LIB} PRIVATE ${MGBA_DIR}/src)
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE
+target_compile_definitions(${COMPONENT_LIB} PUBLIC
     MINIMAL_CORE=2
     DISABLE_THREADING
     MGBA_STANDALONE
     COLOR_16_BIT
     COLOR_5_6_5
-    M_CORE_GBA
+    M_CORE_GBA)
+
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
     # Feature detection upstream performs via CMake find_function; the
-    # riscv newlib provides all three (verified in libc.a).
+    # riscv newlib provides these (verified in libc.a).
     HAVE_LOCALE
-    HAVE_STRTOF_L)
+    HAVE_STRTOF_L
+    HAVE_LOCALTIME_R)
 
 # Third-party code spelling: riscv newlib uses `long` for 32-bit types, so
 # -Wformat flags upstream logging verbatim (same width, benign). gb/audio.c
