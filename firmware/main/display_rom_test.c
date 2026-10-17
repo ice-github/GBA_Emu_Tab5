@@ -55,9 +55,87 @@ static const char *TAG = "gba_display_rom";
 #define GBA_SCALED_Y ((GBA_DISPLAY_V_RES - GBA_SCALED_H) / 2)
 
 #ifdef GBA_DISPLAY_PPA_STREAM_TEST
+typedef struct {
+    TaskHandle_t worker_task;
+    TaskHandle_t caller_task;
+    volatile uint32_t completed;
+    volatile uint32_t presented;
+    volatile int64_t completed_at_us;
+    volatile uint32_t present_refresh_snapshot;
+    volatile uint32_t present_duration_us;
+    volatile esp_err_t worker_error;
+    uint16_t *pending_target;
+    volatile bool stop_worker;
+    volatile bool worker_exited;
+} ppa_async_state_t;
+
+static void ppa_present_worker(void *arg) {
+    ppa_async_state_t *state = arg;
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (state->stop_worker) {
+            break;
+        }
+        while (state->presented < state->completed) {
+            uint32_t frame = state->presented;
+            int64_t present_start = esp_timer_get_time();
+            esp_err_t err = gba_display_present_region(
+                0, GBA_SCALED_Y, GBA_SCALED_W, GBA_SCALED_H,
+                state->pending_target);
+            state->worker_error = err;
+            if (err == ESP_OK) {
+                state->present_refresh_snapshot = gba_display_refresh_count();
+            }
+            state->present_duration_us =
+                (uint32_t)(esp_timer_get_time() - present_start);
+            state->presented = frame + 1;
+            xTaskNotifyGive(state->caller_task);
+        }
+    }
+    state->worker_exited = true;
+    xTaskNotifyGive(state->caller_task);
+    vTaskDelete(NULL);
+}
+
+static bool ppa_async_done(ppa_client_handle_t client,
+                           ppa_event_data_t *event_data, void *user_data) {
+    (void)client;
+    (void)event_data;
+    ppa_async_state_t *state = user_data;
+    state->completed_at_us = esp_timer_get_time();
+    state->completed++;
+    BaseType_t woken = pdFALSE;
+    vTaskNotifyGiveFromISR(state->worker_task, &woken);
+    return woken == pdTRUE;
+}
+
+static esp_err_t ppa_wait_for(ppa_async_state_t *state, uint32_t expected,
+                              uint32_t timeout_ms, uint32_t *blocked_us) {
+    const int64_t started = esp_timer_get_time();
+    const int64_t deadline = started + (int64_t)timeout_ms * 1000;
+    while (state->presented < expected) {
+        const int64_t left = deadline - esp_timer_get_time();
+        if (left <= 0) {
+            return ESP_ERR_TIMEOUT;
+        }
+        TickType_t ticks = pdMS_TO_TICKS((uint32_t)((left + 999) / 1000));
+        if (ticks == 0) ticks = 1;
+        (void)ulTaskNotifyTake(pdTRUE, ticks);
+    }
+    if (state->worker_error != ESP_OK) {
+        return state->worker_error;
+    }
+    if (blocked_us) {
+        *blocked_us = (uint32_t)(esp_timer_get_time() - started);
+    }
+    return ESP_OK;
+}
+
 static esp_err_t ppa_convert_gba_frame(ppa_client_handle_t client,
                                        const uint16_t *source,
-                                       uint16_t *panel_fb) {
+                                       uint16_t *panel_fb,
+                                       ppa_trans_mode_t mode,
+                                       void *user_data) {
     ppa_srm_oper_config_t op = {
         .in.buffer = source,
         .in.pic_w = GBA_FRAME_WIDTH,
@@ -82,8 +160,8 @@ static esp_err_t ppa_convert_gba_frame(ppa_client_handle_t client,
         .rgb_swap = false,
         .byte_swap = false,
         .alpha_update_mode = PPA_ALPHA_NO_CHANGE,
-        .mode = PPA_TRANS_MODE_BLOCKING,
-        .user_data = NULL,
+        .mode = mode,
+        .user_data = user_data,
     };
     return ppa_do_scale_rotate_mirror(client, &op);
 }
@@ -425,7 +503,7 @@ esp_err_t gba_display_rom_test_run(void) {
              GBA_SCALED_Y, (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)psram_before);
 
-cleanup:
+cleanup: ;
     if (ret != ESP_OK) {
         if (surface) {
             heap_caps_free(surface);
@@ -480,6 +558,16 @@ esp_err_t gba_display_stream_test_run(void) {
     uint32_t *scale_us = NULL;
     uint32_t *present_us = NULL;
     uint32_t *wait_us = NULL;
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+    uint32_t *snapshot_us = NULL;
+    uint32_t *ppa_block_us = NULL;
+    uint16_t *ppa_snapshot = NULL;
+    ppa_async_state_t async_state = {0};
+    uint32_t async_expected = 0;
+    uint32_t async_frame = 0;
+    int64_t async_submitted_us = 0;
+    bool async_pending = false;
+#endif
 #ifdef GBA_FRAME_ACCOUNT
     /* Per-frame core breakdown (only filled with GBA_FRAME_ACCOUNT). */
     uint32_t *f_draw_us = NULL;
@@ -496,6 +584,9 @@ esp_err_t gba_display_stream_test_run(void) {
     esp_err_t ret = ESP_FAIL;
 
     const size_t sample_arrays = 5
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+                                 + 2
+#endif
 #ifdef GBA_FRAME_ACCOUNT
                                  + 5
 #endif
@@ -513,8 +604,14 @@ esp_err_t gba_display_stream_test_run(void) {
     scale_us = crc_us + GBA_ROM_FRAME_COUNT;
     present_us = scale_us + GBA_ROM_FRAME_COUNT;
     wait_us = present_us + GBA_ROM_FRAME_COUNT;
+    uint32_t *extra_samples = wait_us + GBA_ROM_FRAME_COUNT;
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+    snapshot_us = extra_samples;
+    ppa_block_us = snapshot_us + GBA_ROM_FRAME_COUNT;
+    extra_samples = ppa_block_us + GBA_ROM_FRAME_COUNT;
+#endif
 #ifdef GBA_FRAME_ACCOUNT
-    f_draw_us = wait_us + GBA_ROM_FRAME_COUNT;
+    f_draw_us = extra_samples;
     f_dma_r = f_draw_us + GBA_ROM_FRAME_COUNT;
     f_dma_w = f_dma_r + GBA_ROM_FRAME_COUNT;
     f_event_us = f_dma_w + GBA_ROM_FRAME_COUNT;
@@ -562,6 +659,32 @@ esp_err_t gba_display_stream_test_run(void) {
                  esp_err_to_name(err));
         goto cleanup;
     }
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+    ppa_event_callbacks_t ppa_cbs = {.on_trans_done = ppa_async_done};
+    err = ppa_client_register_event_callbacks(ppa_client, &ppa_cbs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "PPA completion callback registration failed: %s",
+                 esp_err_to_name(err));
+        goto cleanup;
+    }
+    ppa_snapshot = heap_caps_aligned_alloc(
+        64, GBA_FRAME_PIXELS * sizeof(uint16_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ppa_snapshot) {
+        ESP_LOGE(TAG, "PPA source snapshot allocation failed");
+        goto cleanup;
+    }
+    async_state.caller_task = xTaskGetCurrentTaskHandle();
+    if (xTaskCreatePinnedToCore(ppa_present_worker, "gba_ppa_present", 4096,
+                                &async_state, 10, &async_state.worker_task,
+                                1) != pdPASS) {
+        ESP_LOGE(TAG, "PPA presentation worker task creation failed");
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+    ESP_LOGI(TAG, "PPA async overlap active: source snapshot=%u bytes",
+             (unsigned)(GBA_FRAME_PIXELS * sizeof(uint16_t)));
+#endif
     ESP_LOGI(TAG, "PPA SRM active: CCW 90 + 4.5x into panel buffers; "
                   "emulator framebuffer CRCs remain the CPU reference");
 #endif
@@ -590,6 +713,9 @@ esp_err_t gba_display_stream_test_run(void) {
 
     uint64_t run_total = 0, crc_total = 0, scale_total = 0, present_total = 0,
              wait_total = 0;
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+    uint64_t snapshot_total = 0, ppa_block_total = 0;
+#endif
     uint32_t crc_mismatches = 0;
     uint32_t refresh_timeouts = 0;
     /* Slowest frames by runFrame time, for spike attribution against the
@@ -598,7 +724,9 @@ esp_err_t gba_display_stream_test_run(void) {
     uint32_t run_slow_us[3] = {0, 0, 0};
     int index = 1; /* fb[0] is front, so draw into fb[1] */
     bool ok = true;
+#ifdef GBA_DISPLAY_PPA_OVERLAP_TEST
     uint32_t previous_present_snapshot = 0;
+#endif
 
     const int64_t stream_start_us = esp_timer_get_time();
 #if defined(GBA_FRAME_ACCOUNT)
@@ -641,6 +769,92 @@ esp_err_t gba_display_stream_test_run(void) {
         }
 #endif
 
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+        /* The prior conversion runs while this frame is emulated. Its input is
+         * an immutable snapshot, so runFrame may continue writing the core FB. */
+        if (async_pending) {
+            uint32_t blocked = 0;
+            if (ppa_wait_for(&async_state, async_expected,
+                             GBA_DISPLAY_SYNC_TIMEOUT_MS, &blocked) != ESP_OK) {
+                ESP_LOGE(TAG, "PPA timed out at frame=%" PRIu32,
+                         async_frame + 1);
+                ok = false;
+                err = ESP_ERR_TIMEOUT;
+                break;
+            }
+            async_pending = false;
+            scale_us[async_frame] =
+                (uint32_t)(async_state.completed_at_us - async_submitted_us);
+            ppa_block_us[async_frame] = blocked;
+            scale_total += scale_us[async_frame];
+            ppa_block_total += blocked;
+
+            present_us[async_frame] = async_state.present_duration_us;
+            present_total += present_us[async_frame];
+
+            uint32_t refresh_snapshot =
+                async_state.present_refresh_snapshot;
+            int64_t refresh_start = esp_timer_get_time();
+            if (gba_display_wait_refresh_since(
+                    refresh_snapshot, GBA_DISPLAY_SYNC_TIMEOUT_MS) != ESP_OK) {
+                ESP_LOGE(TAG, "refresh timed out after async frame=%" PRIu32,
+                         async_frame + 1);
+                refresh_timeouts++;
+                ok = false;
+                err = ESP_ERR_TIMEOUT;
+                break;
+            }
+            wait_us[async_frame] =
+                (uint32_t)(esp_timer_get_time() - refresh_start);
+            wait_total += wait_us[async_frame];
+            index ^= 1;
+        }
+
+        int64_t snapshot_start = esp_timer_get_time();
+        memcpy(ppa_snapshot, session.framebuffer,
+               GBA_FRAME_PIXELS * sizeof(uint16_t));
+        snapshot_us[i] = (uint32_t)(esp_timer_get_time() - snapshot_start);
+        snapshot_total += snapshot_us[i];
+
+        async_expected = async_state.completed + 1;
+        async_submitted_us = esp_timer_get_time();
+        async_frame = i;
+        async_state.pending_target =
+            fb[index] + (size_t)GBA_SCALED_Y * GBA_DISPLAY_H_RES;
+        err = ppa_convert_gba_frame(ppa_client, ppa_snapshot, fb[index],
+                                    PPA_TRANS_MODE_NON_BLOCKING, &async_state);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "PPA submit failed at frame=%" PRIu32 ": %s",
+                     i + 1, esp_err_to_name(err));
+            ok = false;
+            break;
+        }
+        async_pending = true;
+
+        run_us[i] = (uint32_t)(t1 - t0);
+        crc_us[i] = (uint32_t)(t2 - t1);
+        for (int s = 0; s < 3; ++s) {
+            if (run_us[i] > run_slow_us[s]) {
+                for (int m = 2; m > s; --m) {
+                    run_slow_us[m] = run_slow_us[m - 1];
+                    run_slow_idx[m] = run_slow_idx[m - 1];
+                }
+                run_slow_us[s] = run_us[i];
+                run_slow_idx[s] = i;
+                break;
+            }
+        }
+        run_total += run_us[i];
+        crc_total += crc_us[i];
+        /* Keep IDLE0 runnable periodically in this fully asynchronous mode.
+         * One tick per 64 GBA frames is negligible but services the ESP task
+         * watchdog's idle-task subscription during long uninterrupted streams. */
+        if ((i & 63u) == 63u) {
+            vTaskDelay(1);
+        }
+        continue;
+#endif
+
 #ifdef GBA_DISPLAY_PPA_OVERLAP_TEST
         /* CPU emulation/CRC ran while the prior image scanned out. Gate PPA
          * writes until that submitted target has crossed a refresh boundary. */
@@ -669,7 +883,7 @@ esp_err_t gba_display_stream_test_run(void) {
 #ifdef GBA_DISPLAY_PPA_STREAM_TEST
         err = ppa_convert_gba_frame(ppa_client,
                                     (const uint16_t *)session.framebuffer,
-                                    fb[index]);
+                                    fb[index], PPA_TRANS_MODE_BLOCKING, NULL);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "PPA conversion failed at frame %" PRIu32 ": %s",
                      i + 1, esp_err_to_name(err));
@@ -751,6 +965,42 @@ esp_err_t gba_display_stream_test_run(void) {
         index ^= 1;
 #endif
     }
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+    if (ok && async_pending) {
+        uint32_t blocked = 0;
+        if (ppa_wait_for(&async_state, async_expected,
+                         GBA_DISPLAY_SYNC_TIMEOUT_MS, &blocked) != ESP_OK) {
+            ESP_LOGE(TAG, "final PPA conversion timed out");
+            ok = false;
+            err = ESP_ERR_TIMEOUT;
+        } else {
+            async_pending = false;
+            scale_us[async_frame] =
+                (uint32_t)(async_state.completed_at_us - async_submitted_us);
+            ppa_block_us[async_frame] = blocked;
+            scale_total += scale_us[async_frame];
+            ppa_block_total += blocked;
+
+            present_us[async_frame] = async_state.present_duration_us;
+            present_total += present_us[async_frame];
+            uint32_t refresh_snapshot =
+                async_state.present_refresh_snapshot;
+            int64_t refresh_start = esp_timer_get_time();
+            if (gba_display_wait_refresh_since(
+                    refresh_snapshot,
+                    GBA_DISPLAY_SYNC_TIMEOUT_MS) != ESP_OK) {
+                ESP_LOGE(TAG, "final async refresh timed out");
+                refresh_timeouts++;
+                ok = false;
+                err = ESP_ERR_TIMEOUT;
+            } else {
+                wait_us[async_frame] =
+                    (uint32_t)(esp_timer_get_time() - refresh_start);
+                wait_total += wait_us[async_frame];
+            }
+        }
+    }
+#endif
 #ifdef GBA_DISPLAY_PPA_OVERLAP_TEST
     if (ok && GBA_ROM_FRAME_COUNT > 0) {
         int64_t wait_start = esp_timer_get_time();
@@ -856,6 +1106,12 @@ esp_err_t gba_display_stream_test_run(void) {
     report_stage("present", present_us, GBA_ROM_FRAME_COUNT, present_total);
 #ifdef GBA_DISPLAY_PPA_OVERLAP_TEST
     report_stage("buffer_wait", wait_us, GBA_ROM_FRAME_COUNT, wait_total);
+#elif defined(GBA_DISPLAY_PPA_ASYNC_TEST)
+    report_stage("refresh", wait_us, GBA_ROM_FRAME_COUNT, wait_total);
+    report_stage("snapshot", snapshot_us, GBA_ROM_FRAME_COUNT,
+                 snapshot_total);
+    report_stage("ppa_block", ppa_block_us, GBA_ROM_FRAME_COUNT,
+                 ppa_block_total);
 #else
     report_stage("refresh", wait_us, GBA_ROM_FRAME_COUNT, wait_total);
 #endif
@@ -873,14 +1129,52 @@ esp_err_t gba_display_stream_test_run(void) {
 #endif
 
 cleanup:
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+    unsigned cleanup_waits = 0;
+    while (async_pending) {
+        (void)ppa_wait_for(&async_state, async_expected,
+                           GBA_DISPLAY_SYNC_TIMEOUT_MS, NULL);
+        if (async_state.completed >= async_expected &&
+            async_state.presented >= async_expected) {
+            async_pending = false;
+            break;
+        }
+        if (++cleanup_waits >= 25) {
+            ESP_LOGE(TAG, "PPA did not quiesce; retaining live buffers and "
+                          "state to prevent DMA use-after-free");
+            /* The DMA callback and worker retain pointers into this stack
+             * frame. In this experimental test app, fail-stop rather than
+             * return and free memory that hardware may still be using. */
+            for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
+    if (async_state.worker_task) {
+        async_state.stop_worker = true;
+        xTaskNotifyGive(async_state.worker_task);
+        while (!async_state.worker_exited) {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        }
+        async_state.worker_task = NULL;
+    }
+#endif
 #ifdef GBA_DISPLAY_PPA_STREAM_TEST
-    if (ppa_client) {
+    if (ppa_client
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+        && !async_pending
+#endif
+    ) {
         esp_err_t ppa_err = ppa_unregister_client(ppa_client);
         if (ppa_err != ESP_OK) {
             ESP_LOGE(TAG, "PPA SRM client unregister failed: %s",
                      esp_err_to_name(ppa_err));
             if (ret == ESP_OK) ret = ppa_err;
         }
+    }
+#endif
+#ifdef GBA_DISPLAY_PPA_ASYNC_TEST
+    if (!async_pending && ppa_snapshot) {
+        heap_caps_free(ppa_snapshot);
+        ppa_snapshot = NULL;
     }
 #endif
     if (sync_enabled) {

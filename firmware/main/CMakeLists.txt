@@ -58,6 +58,7 @@ set(_modes GBA_CORE_INIT_TEST GBA_SD_PROBE_TEST GBA_SD_ROM_LOAD_TEST
            GBA_SD_FRAME_TEST GBA_SD_PERF_TEST GBA_DISPLAY_TEST
            GBA_DISPLAY_ROM_TEST GBA_DISPLAY_STREAM_TEST
            GBA_DISPLAY_PPA_STREAM_TEST GBA_DISPLAY_PPA_OVERLAP_TEST
+           GBA_DISPLAY_PPA_ASYNC_TEST
            GBA_DISPLAY_ANIM_TEST
            GBA_PPA_BENCH_TEST)
 set(_selected "")
@@ -86,7 +87,8 @@ endif()
 # a profile, because that header pulls in the ROM path/size/SHA-256/CRC vector.
 set(_rom_modes GBA_SD_PROBE_TEST GBA_SD_ROM_LOAD_TEST GBA_SD_FRAME_TEST
                GBA_SD_PERF_TEST GBA_DISPLAY_ROM_TEST GBA_DISPLAY_STREAM_TEST
-               GBA_DISPLAY_PPA_STREAM_TEST GBA_DISPLAY_PPA_OVERLAP_TEST)
+               GBA_DISPLAY_PPA_STREAM_TEST GBA_DISPLAY_PPA_OVERLAP_TEST
+               GBA_DISPLAY_PPA_ASYNC_TEST)
 set(_rom_mode_selected FALSE)
 foreach(_mode ${_rom_modes})
     if(${_mode})
@@ -191,6 +193,19 @@ if(GBA_DISPLAY_PPA_OVERLAP_TEST)
     endif()
     if(GBA_FRAME_ACCOUNT)
         list(APPEND main_defs GBA_FRAME_ACCOUNT=1)
+    endif()
+endif()
+
+# Experimental async PPA pipeline: snapshot the emulated framebuffer, enqueue
+# a non-blocking transform, and run the following CPU frame before waiting for
+# completion. Serialized and overlap modes remain unchanged references.
+if(GBA_DISPLAY_PPA_ASYNC_TEST)
+    list(APPEND main_srcs display_test.c display_rom_test.c)
+    list(APPEND main_defs
+        GBA_DISPLAY_PPA_STREAM_TEST=1
+        GBA_DISPLAY_PPA_ASYNC_TEST=1)
+    if(NOT GBA_STREAM_VERIFY_CRC)
+        list(APPEND main_defs GBA_STREAM_NO_VERIFY=1)
     endif()
 endif()
 

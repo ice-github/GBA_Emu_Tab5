@@ -798,10 +798,10 @@ wait and is superseded below. Each mode/profile combination was run three times
 (600 frames per run); displayed values below were identical across the three
 runs to the shown precision.
 
-| ROM | serialized PPA | overlap PPA | throughput gain | CRC / timeouts |
-|---|---:|---:|---:|---|
-| GS1 | 29.76 fps | **35.19 fps** | **+18.2%** | 600/600 / 0 |
-| FFTA | 19.01 fps | **23.79 fps** | **+25.1%** | 600/600 / 0 |
+| ROM | serialized PPA | overlap PPA | async PPA | async vs overlap | CRC / timeouts |
+|---|---:|---:|---:|---:|---|
+| GS1 | 29.76 fps | 35.19 fps | **38.62 fps** | **+9.7%** | 600/600 / 0 |
+| FFTA | 19.01 fps | 23.79 fps | **27.52–27.73 fps** | **+15.9%** | 600/600 / 0 |
 
 Corrected overlap stage averages (serialized → overlap, us):
 
@@ -816,3 +816,63 @@ after the next panel refresh, so the buffer is already free when conversion
 begins. On GS1 there is still a shorter residual wait. User confirms no visible
 flicker or tearing on the overlap display for either ROM. This remains an
 opt-in test mode; results establish these two workloads, not every ROM.
+
+### CRC-off baseline, ARMCore placement, and async PPA experiment (2026-10-17)
+
+These are separate experiments, all on the same Tab5/P4 rev v1.0 with the
+existing O2/performance sdkconfig and three 600-frame runs per ROM/mode. CRC-off
+is a timing baseline only; correctness is established by separate CRC-enabled
+runs. It removes about 2.8–3.0ms/frame of checksum work, but throughput does
+not increase by that full amount because refresh/buffer waiting changes with
+the schedule:
+
+| ROM | CRC-off overlap throughput (3-run range) | runFrame avg | PPA avg | buffer wait avg |
+|---|---:|---:|---:|---:|
+| GS1 | 37.66–37.76 fps | 14,269–14,274 us | 8,946–8,947 us | 3,244–3,308 us |
+| FFTA | 26.04–26.06 fps | 28,960–28,964 us | 9,130–9,131 us | 251–282 us |
+
+Representative CRC-off stage statistics (avg / p95 / max, us; CRC stage is
+disabled and therefore zero):
+
+| ROM | runFrame | CRC | PPA | present | buffer wait |
+|---|---:|---:|---:|---:|---:|
+| GS1 | 14,269 / 34,575 / 56,425 | 0 / 0 / 0 | 8,946 / 9,433 / 9,507 | 15 / 33 / 36 | 3,244 / 6,459 / 8,928 |
+| FFTA | 28,964 / 40,450 / 84,428 | 0 / 0 / 0 | 9,131 / 9,422 / 9,491 | 19 / 32 / 37 | 282 / 2,288 / 19,062 |
+
+The opt-in `GBA_ARMCORE_INTERNAL=ON` allocator placed exactly the 412-byte
+`ARMCore` object in internal DRAM; other anonymous mGBA mappings remained in
+PSRAM. It was CRC-enabled and retained the default PSRAM placement as the
+control. Results did not show a useful gain: GS1 was 34.98 fps in all three
+internal runs versus 35.19 fps for PSRAM; FFTA was 23.77–23.79 fps versus
+23.79 fps for PSRAM. Keep the option as an A/B diagnostic, not a recommended
+default.
+
+Representative ARMCore-internal run stage statistics (avg / p95 / max, us):
+
+| ROM | runFrame | CRC | PPA | present | buffer wait |
+|---|---:|---:|---:|---:|---:|
+| GS1 | 16,258 / 35,485 / 57,501 | 2,796 / 3,033 / 3,186 | 9,155 / 9,424 / 9,465 | 34 / 42 / 46 | 329 / 985 / 9,385 |
+| FFTA | 30,074 / 41,252 / 84,706 | 2,645 / 2,920 / 3,206 | 9,253 / 9,437 / 9,459 | 33 / 42 / 46 | 17 / 22 / 143 |
+
+The separately gated `GBA_DISPLAY_PPA_ASYNC_TEST=ON` mode snapshots the
+75-KiB emulator framebuffer to PSRAM, submits non-blocking PPA, and runs the
+next emulated frame while PPA reads that immutable snapshot. A CPU1 presentation
+worker performs the panel handoff after PPA completion; the main task waits for
+refresh before reusing the destination. A one-tick yield every 64 frames avoids
+starving IDLE0. Three runs per ROM completed with all 600 CRCs matching, zero
+PPA/refresh timeouts, and no WDT/panic logs. The asynchronous mode remains
+experimental: CRCs validate the emulated framebuffer, not the transformed
+panel image, and human visual acceptance for this new scheduling path is still
+required before adoption.
+
+| ROM | Async runFrame avg / p95 / max | CRC avg / p95 / max | PPA completion avg / p95 / max | snapshot avg / p95 / max | present avg / p95 / max | refresh wait avg / p95 / max | throughput |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| GS1 | 17,008 / 36,281 / 57,721 us | 2,991 / 3,180 / 3,197 us | 9,437 / 9,457 / 9,471 us | 967 / 1,124 / 1,274 us | 9 / 15 / 43 us | 4,035 / 6,990 / 8,941 us | 38.62 fps |
+| FFTA | 30,997 / 42,190 / 84,668 us | 2,785 / 3,162 / 3,214 us | 9,438 / 9,464 / 9,476 us | 1,078 / 1,176 / 1,208 us | 10 / 17 / 50 us | 289–562 / 2,161–5,246 / 5,338–7,295 us | 27.52–27.73 fps |
+
+Values are the per-run summaries; repeated runs were effectively identical to
+the shown precision except elapsed throughput and refresh wait. `ppa_block`
+additional wait was 22 us average in both cases (8 us p95; 8.7ms max from the
+first frame, before useful overlap). Async improves both tested workloads but
+still falls well short of the 59.73 emulated-frame/s real-time target; do not
+conflate that with the panel's separately measured 48.21Hz refresh ceiling.

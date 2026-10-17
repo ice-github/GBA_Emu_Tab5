@@ -149,6 +149,12 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     HAVE_STRTOF_L
     HAVE_LOCALTIME_R)
 
+# A/B experiment only: keep the hottest CPU state in internal DRAM while ROM,
+# GBA board state and bulk emulated memory remain PSRAM-backed.
+if(GBA_ARMCORE_INTERNAL)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE GBA_ARMCORE_INTERNAL=1)
+endif()
+
 # Third-party code spelling: riscv newlib uses `long` for 32-bit types, so
 # -Wformat flags upstream logging verbatim (same width, benign). gb/audio.c
 # trips -Wmaybe-uninitialized the same way it does on some GCC versions

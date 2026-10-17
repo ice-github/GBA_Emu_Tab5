@@ -14,9 +14,30 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
+#ifdef GBA_ARMCORE_INTERNAL
+#include <mgba/internal/arm/arm.h>
+#endif
+
 static const char* TAG = "mgba_port";
 
 void* anonymousMemoryMap(size_t size) {
+#ifdef GBA_ARMCORE_INTERNAL
+    /* In this core build, _GBACoreInit() requests ARMCore as a distinct
+     * anonymous mapping. Match only that exact object; all bulk mappings stay
+     * in PSRAM. Do not silently fall back: the A/B must be unambiguous. */
+    if (size == sizeof(struct ARMCore)) {
+        void* p = heap_caps_calloc(1, size,
+                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!p) {
+            ESP_LOGE(TAG, "internal ARMCore allocation failed (%u bytes)",
+                     (unsigned)size);
+        } else {
+            ESP_LOGI(TAG, "ARMCore allocated in internal DRAM: %p (%u bytes)",
+                     p, (unsigned)size);
+        }
+        return p;
+    }
+#endif
     void* p = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!p) {
         ESP_LOGE(TAG, "PSRAM allocation failed for %u bytes", (unsigned)size);

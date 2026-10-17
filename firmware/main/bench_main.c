@@ -23,7 +23,8 @@
     defined(GBA_SD_FRAME_TEST) || defined(GBA_SD_PERF_TEST) || \
     defined(GBA_DISPLAY_ROM_TEST) || defined(GBA_DISPLAY_STREAM_TEST) || \
     defined(GBA_DISPLAY_PPA_STREAM_TEST) || \
-    defined(GBA_DISPLAY_PPA_OVERLAP_TEST)
+    defined(GBA_DISPLAY_PPA_OVERLAP_TEST) || \
+    defined(GBA_DISPLAY_PPA_ASYNC_TEST)
 #define GBA_HAS_SD_PATHS 1
 #endif
 
@@ -32,7 +33,8 @@
     defined(GBA_SD_PERF_TEST) || defined(GBA_DISPLAY_ROM_TEST) || \
     defined(GBA_DISPLAY_STREAM_TEST) || \
     defined(GBA_DISPLAY_PPA_STREAM_TEST) || \
-    defined(GBA_DISPLAY_PPA_OVERLAP_TEST)
+    defined(GBA_DISPLAY_PPA_OVERLAP_TEST) || \
+    defined(GBA_DISPLAY_PPA_ASYNC_TEST)
 #define GBA_HAS_ROM_LOADER 1
 #endif
 
@@ -52,6 +54,7 @@
     defined(GBA_DISPLAY_STREAM_TEST) || \
     defined(GBA_DISPLAY_PPA_STREAM_TEST) || \
     defined(GBA_DISPLAY_PPA_OVERLAP_TEST) || \
+    defined(GBA_DISPLAY_PPA_ASYNC_TEST) || \
     defined(GBA_DISPLAY_ANIM_TEST) || defined(GBA_PPA_BENCH_TEST)
 #include "display_test.h"
 #endif
