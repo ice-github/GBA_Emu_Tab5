@@ -662,6 +662,9 @@ esp_err_t gba_display_stream_test_run(void) {
         }
 #endif
 
+#ifdef GBA_DISPLAY_PPA_OVERLAP_TEST
+        int64_t convert_start = esp_timer_get_time();
+#endif
         uint16_t *dst = fb[index] + (size_t)GBA_SCALED_Y * GBA_DISPLAY_H_RES;
 #ifdef GBA_DISPLAY_PPA_STREAM_TEST
         err = ppa_convert_gba_frame(ppa_client,
@@ -716,7 +719,12 @@ esp_err_t gba_display_stream_test_run(void) {
 
         run_us[i] = (uint32_t)(t1 - t0);
         crc_us[i] = (uint32_t)(t2 - t1);
+#ifdef GBA_DISPLAY_PPA_OVERLAP_TEST
+        /* Buffer-free waiting is reported separately, not charged to PPA. */
+        scale_us[i] = (uint32_t)(t3 - convert_start);
+#else
         scale_us[i] = (uint32_t)(t3 - t2);
+#endif
         present_us[i] = (uint32_t)(t4 - t3);
 #ifndef GBA_DISPLAY_PPA_OVERLAP_TEST
         wait_us[i] = (uint32_t)(t5 - wait_start);
@@ -846,7 +854,11 @@ esp_err_t gba_display_stream_test_run(void) {
     report_stage("scale", scale_us, GBA_ROM_FRAME_COUNT, scale_total);
 #endif
     report_stage("present", present_us, GBA_ROM_FRAME_COUNT, present_total);
+#ifdef GBA_DISPLAY_PPA_OVERLAP_TEST
+    report_stage("buffer_wait", wait_us, GBA_ROM_FRAME_COUNT, wait_total);
+#else
     report_stage("refresh", wait_us, GBA_ROM_FRAME_COUNT, wait_total);
+#endif
 
     ret = ESP_OK;
     ESP_LOGI(TAG, "last frame displayed; psram_free=%u (was %u)",

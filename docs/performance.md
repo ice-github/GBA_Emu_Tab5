@@ -792,9 +792,27 @@ idf.py -D GBA_DISPLAY_PPA_OVERLAP_TEST=ON -D GBA_ROM_PROFILE=gs1 build
 ```
 
 For FFTA substitute `-D GBA_ROM_PROFILE=ffta`. Keep the 20 kHz backlight
-initialization unchanged. GS1 device result (2026-10-17): **600/600 CRCs,
-0 refresh timeouts, 35.06 fps** over 17.11 s. Serialized PPA baseline was
-29.76 fps, so this run improved stream throughput by about 18%. Stage averages
-(us): runFrame 16,182; CRC 2,799; PPA 9,487; present 35; refresh wait 344.
-This is an opt-in experiment, not the default path. The visual tearing/flicker
-review is pending; do not claim visual approval from CRCs alone.
+initialization unchanged. Measurement boundaries now separate the buffer-free
+wait from the PPA call; the earlier single GS1 run's PPA stage included that
+wait and is superseded below. Each mode/profile combination was run three times
+(600 frames per run); displayed values below were identical across the three
+runs to the shown precision.
+
+| ROM | serialized PPA | overlap PPA | throughput gain | CRC / timeouts |
+|---|---:|---:|---:|---|
+| GS1 | 29.76 fps | **35.19 fps** | **+18.2%** | 600/600 / 0 |
+| FFTA | 19.01 fps | **23.79 fps** | **+25.1%** | 600/600 / 0 |
+
+Corrected overlap stage averages (serialized → overlap, us):
+
+| ROM | runFrame | CRC | PPA | present | refresh / buffer wait |
+|---|---:|---:|---:|---:|---:|
+| GS1 | 16,051 → 16,087 | 2,793 → 2,796 | 9,149 → 9,162 | 32 → 34 | 5,565 → 320 |
+| FFTA | 30,104 → 30,066 | 2,636 → 2,645 | 9,240 → 9,254 | 30 → 32 | 10,596 → 21 |
+
+GS1 overlap refresh-wait p95/max: 1,069/8,427 us; FFTA: 24/3,720 us. The
+benefit is largest on FFTA because its longer `runFrame` typically finishes
+after the next panel refresh, so the buffer is already free when conversion
+begins. On GS1 there is still a shorter residual wait. User confirms no visible
+flicker or tearing on the overlap display for either ROM. This remains an
+opt-in test mode; results establish these two workloads, not every ROM.
