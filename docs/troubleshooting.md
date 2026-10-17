@@ -55,6 +55,28 @@
 - Failure signature: transfer completes and CRCs are OK, then reboots near
   `bsp_display_new`.
 
+## ESP-IDF component requirements
+
+- `REQUIRES` / `PRIV_REQUIRES` are resolved by an early-expansion CMake pass
+  (`tools/cmake/scripts/component_get_requirements.cmake`) that does **not** see
+  project build options. A `REQUIRES` placed inside `if(GBA_..._TEST)` is
+  silently dropped; the symptom is `fatal error: <header>: No such file or
+  directory` from the source that needed it, plus an IDF hint naming the
+  component. List such requirements unconditionally. Conditional `SRCS` are
+  still fine because sources are collected in the main configure pass.
+- The resolved list (and what IDF actually kept) is in
+  `build/project_description.json` -> `build_component_info`.
+
+## Display dependency
+
+- Board/display support comes from the **noglib** Tab5 BSP
+  (`espressif/m5stack_tab5_noglib`, 1.3.2), declared in
+  `firmware/main/idf_component.yml` because `managed_components/` is gitignored.
+  The graphical BSP additionally pulls `esp_lvgl_port`; the release resolved for
+  IDF 5.5.4 (2.9.0) uses `on_frame_buf_complete`, an IDF 6.x-only DSI callback
+  member, and fails to compile. Do not switch back to the graphical variant
+  without pinning a compatible `esp_lvgl_port`.
+
 ## Stale builds and races
 
 - Re-print READY-adjacent marker every few seconds until first FILE header,
@@ -63,3 +85,43 @@
   old `app_desc` timestamp.
 - No debugging magic: never use `--force` to push mismatched bootloaders onto
   rev v1.0.
+
+## sdkconfig changes do not apply to an existing sdkconfig
+
+- ESP-IDF applies `sdkconfig.defaults` only when generating a *new*
+  `sdkconfig`. `firmware/sdkconfig` exists (it is gitignored but persists in the
+  working tree), so adding a line to `sdkconfig.defaults` and rebuilding silently
+  keeps the old value. `-B <builddir>` does not help: the config file location is
+  the project directory, not the build directory.
+- Symptom seen here: `CONFIG_BSP_LCD_DPI_BUFFER_NUMS=2` was added to
+  `sdkconfig.defaults`, the build succeeded, and the running image still had one
+  frame buffer.
+- Check the applied value (not the defaults file) with
+  `<builddir>/config/sdkconfig.json`, or `grep` the project `sdkconfig`.
+- To apply: delete `firmware/sdkconfig` and rebuild, or edit the value in
+  `firmware/sdkconfig` as well. Confirm with a before/after diff that only the
+  intended line changed.
+
+## DPI frame buffers and tearing
+
+- `esp_lcd_panel_draw_bitmap()` has three paths
+  (see `esp_lcd_panel_dpi.c`): if the buffer passed is one of the driver's own
+  frame buffers it only does `esp_cache_msync` and sets `cur_fb_index`; with
+  DMA2D it hands the copy to `esp_async_fbcpy`; otherwise it `memcpy`s inline.
+  Only the first path changes which buffer is scanned out, and it always copies
+  into `fbs[cur_fb_index]` in the other two.
+- Therefore double buffering requires pointing the call at a driver frame
+  buffer (obtained via `esp_lcd_dpi_panel_get_frame_buffer()`), not at a private
+  surface. With a private surface and `num_fbs=1` the DSI scans the very buffer
+  DMA2D writes, so tearing is structural, not a timing accident.
+- The switch takes effect in `mipi_dsi_dma_trans_done_cb()` at the frame
+  boundary, so the update is frame-aligned.
+- Explicit sync semantics: `on_color_trans_done` fires when a DMA2D copy into a
+  frame buffer finishes; `on_refresh_done` fires when a frame has been scanned
+  out. The first can be invoked from the caller's task (CPU copy path) as well as
+  from the GDMA ISR, so a handler that must work in both contexts needs
+  `xPortInIsrContext()`; the no-copy path invokes it synchronously. The second
+  comes from the DSI bridge VSYNC ISR.
+- Waiting on vsync with a binary semaphore plus drain-then-take costs a whole
+  extra refresh per frame. Wait for the refresh counter to advance instead
+  (task notification plus a counter compare), which is immune to stale events.

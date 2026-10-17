@@ -123,11 +123,12 @@ set(MGBA_SRCS ${MGBA_ARM} ${MGBA_GBA} ${MGBA_CORE} ${MGBA_UTIL}
               ${MGBA_THIRD})
 list(TRANSFORM MGBA_SRCS PREPEND ${MGBA_DIR}/)
 list(APPEND MGBA_SRCS ${CMAKE_CURRENT_LIST_DIR}/version.c
-                      ${CMAKE_CURRENT_LIST_DIR}/memory_psram.c)
+                      ${CMAKE_CURRENT_LIST_DIR}/memory_psram.c
+                      ${CMAKE_CURRENT_LIST_DIR}/mgba_render_timing.c)
 
 idf_component_register(SRCS ${MGBA_SRCS}
-                       INCLUDE_DIRS ../../third_party/mgba/include
-                       PRIV_REQUIRES heap log)
+                       INCLUDE_DIRS ../../third_party/mgba/include include
+                       PRIV_REQUIRES heap log esp_timer)
 
 # Upstream-style includes: core sources include sibling dirs as
 # "gba/cheats/gameshark.h" (rooted at src/).
@@ -152,7 +153,13 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 # -Wformat flags upstream logging verbatim (same width, benign). gb/audio.c
 # trips -Wmaybe-uninitialized the same way it does on some GCC versions
 # upstream. Both are downgraded (not disabled) for this component only.
+# -Wformat-truncation fires on upstream core/log.c only at -O2 and above
+# (provably-null '%s' path the -Og analysis does not see); same treatment.
+# -Wstringop-truncation fires on upstream util/string.c's strncpy+explicit-NUL
+# idiom at -O2; likewise benign, likewise downgraded here, not upstream.
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error=format
     -Wno-error=maybe-uninitialized
-    -Wno-error=char-subscripts)
+    -Wno-error=char-subscripts
+    -Wno-error=format-truncation
+    -Wno-error=stringop-truncation)

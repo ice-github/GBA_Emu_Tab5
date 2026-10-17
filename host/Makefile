@@ -3,12 +3,23 @@ CFLAGS ?= -O2 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 BENCH_SRCS := $(ROOT)/components/bench/bench_core.c \
   $(ROOT)/components/bench/cases_mem.c \
+  $(ROOT)/components/bench/cases_memplacement.c \
   $(ROOT)/components/bench/cases_branch.c \
   $(ROOT)/components/bench/cases_pixel.c \
+  $(ROOT)/components/bench/cases_scale.c \
+  $(ROOT)/components/bench/cases_rot45x.c \
+  $(ROOT)/components/bench/cases_rotsplit.c \
+  $(ROOT)/components/bench/cases_store.c \
+  $(ROOT)/components/gba_scale/gba_scale.c \
   $(ROOT)/host/bench_host.c
-BENCH_INC := -I$(ROOT)/components/bench/include
+BENCH_INC := -I$(ROOT)/components/bench/include \
+  -I$(ROOT)/components/gba_scale/include
 
-all: bench_host
+SCALE_SRCS := $(ROOT)/components/gba_scale/gba_scale.c \
+  $(ROOT)/host/scale_test.c
+SCALE_INC := -I$(ROOT)/components/gba_scale/include
+
+all: bench_host scale_test
 
 bench_host: $(BENCH_SRCS)
 	$(CC) $(CFLAGS) $(BENCH_INC) -o $@ $(BENCH_SRCS)
@@ -38,10 +49,14 @@ smoke565: gba-smoke.c
 	  gba-smoke.c -L$(MGBA_BUILD_565) -lmgba \
 	  -Wl,-rpath,$(MGBA_BUILD_565)
 
-check: bench_host
+scale_test: $(SCALE_SRCS)
+	$(CC) $(CFLAGS) $(SCALE_INC) -o $@ $(SCALE_SRCS)
+
+check: bench_host scale_test
 	./bench_host --config=host-check --git-rev=local | python3 $(ROOT)/tools/bench/validate.py
+	./scale_test
 
 clean:
-	rm -f bench_host gba-smoke gba-smoke-565
+	rm -f bench_host gba-smoke gba-smoke-565 scale_test
 
 .PHONY: all check clean

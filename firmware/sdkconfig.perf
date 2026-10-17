@@ -1,0 +1,8 @@
+# Reproducible -O2 (PERF) app build fragment. This file is NOT a default:
+# pass it explicitly so -Og stays the default build. Example:
+#   idf.py -C firmware -B /tmp/opencode/gba-bench-o2 \
+#     -DSDKCONFIG=/tmp/opencode/gba-bench-o2/sdkconfig \
+#     "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.perf" \
+#     -D GBA_DISPLAY_STREAM_TEST=ON -D GBA_ROM_PROFILE=gs1 build
+# Keep generated sdkconfig/build dirs outside the repo (see .gitignore).
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

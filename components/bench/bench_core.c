@@ -6,7 +6,13 @@
 
 #if defined(ESP_PLATFORM)
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 uint64_t bench_now_ns(void) { return (uint64_t)esp_timer_get_time() * 1000u; }
+/* Yield between cases. A device run takes far longer than the 5 s task
+ * watchdog window, and the bench never blocks, so without this the watchdog
+ * fires, dumps registers, and can corrupt a JSON line on the way out. */
+static void bench_case_gap(void) { vTaskDelay(1); }
 #else
 #include <time.h>
 uint64_t bench_now_ns(void) {
@@ -14,6 +20,8 @@ uint64_t bench_now_ns(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
 }
+/* The host has no watchdog and no competing idle task. */
+static void bench_case_gap(void) {}
 #endif
 
 void bench_sink(const void *p, size_t n) {
@@ -43,14 +51,24 @@ void bench_register(const bench_case_t *c) {
 
 /* Per-file registration entry points (defined in cases_*.c). */
 void bench_cases_mem_register(void);
+void bench_cases_memplacement_register(void);
 void bench_cases_branch_register(void);
 void bench_cases_pixel_register(void);
+void bench_cases_scale_register(void);
+void bench_cases_rot45x_register(void);
+void bench_cases_rotsplit_register(void);
+void bench_cases_store_register(void);
 
 void bench_register_all(void) {
     s_ncases = 0;
     bench_cases_mem_register();
+    bench_cases_memplacement_register();
     bench_cases_branch_register();
     bench_cases_pixel_register();
+    bench_cases_scale_register();
+    bench_cases_rot45x_register();
+    bench_cases_rotsplit_register();
+    bench_cases_store_register();
 }
 
 static int cmp_u64(const void *a, const void *b) {
@@ -137,5 +155,6 @@ void bench_run_all(bench_emit_fn emit, void *ctx, const char *device,
                            r.work_per_s, r.checksum,
                            verified ? "true" : "false");
         if (nch > 0 && (size_t)nch < sizeof(line)) emit(line, ctx);
+        bench_case_gap();
     }
 }

@@ -17,6 +17,7 @@ firmware/sdkconfig.old
 host/bench_host
 host/gba-smoke
 host/gba-smoke-565
+host/scale_test
 
 # User-provided console assets: never commit (repo-root dirs only)
 /roms/

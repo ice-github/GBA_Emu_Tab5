@@ -18,35 +18,69 @@
 #include <mgba/core/core.h>
 #include <mgba/gba/core.h>
 
+/* Modes that mount the SD card read-only through the shared helper. */
 #if defined(GBA_SD_PROBE_TEST) || defined(GBA_SD_ROM_LOAD_TEST) || \
-    defined(GBA_SD_FRAME_TEST) || defined(GBA_SD_PERF_TEST)
+    defined(GBA_SD_FRAME_TEST) || defined(GBA_SD_PERF_TEST) || \
+    defined(GBA_DISPLAY_ROM_TEST) || defined(GBA_DISPLAY_STREAM_TEST) || \
+    defined(GBA_DISPLAY_PPA_STREAM_TEST) || \
+    defined(GBA_DISPLAY_PPA_OVERLAP_TEST)
+#define GBA_HAS_SD_PATHS 1
+#endif
+
+/* Modes that read the profile ROM into PSRAM using the shared loader. */
+#if defined(GBA_SD_ROM_LOAD_TEST) || defined(GBA_SD_FRAME_TEST) || \
+    defined(GBA_SD_PERF_TEST) || defined(GBA_DISPLAY_ROM_TEST) || \
+    defined(GBA_DISPLAY_STREAM_TEST) || \
+    defined(GBA_DISPLAY_PPA_STREAM_TEST) || \
+    defined(GBA_DISPLAY_PPA_OVERLAP_TEST)
+#define GBA_HAS_ROM_LOADER 1
+#endif
+
+#if defined(GBA_HAS_SD_PATHS)
 #include "driver/gpio.h"
 #include "driver/sdmmc_host.h"
 #include "esp_vfs_fat.h"
 #include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#include "gba_sd.h"
 #include <mgba-util/vfs.h>
 #include <mgba-util/crc32.h>
 #include <mgba/core/log.h>
 #include <mbedtls/sha256.h>
 #endif
 
+#if defined(GBA_DISPLAY_TEST) || defined(GBA_DISPLAY_ROM_TEST) || \
+    defined(GBA_DISPLAY_STREAM_TEST) || \
+    defined(GBA_DISPLAY_PPA_STREAM_TEST) || \
+    defined(GBA_DISPLAY_PPA_OVERLAP_TEST) || \
+    defined(GBA_DISPLAY_ANIM_TEST) || defined(GBA_PPA_BENCH_TEST)
+#include "display_test.h"
+#endif
+
 _Static_assert(sizeof(color_t) == 2, "firmware and mGBA must use RGB565");
 
 static const char *TAG = "gba_bench";
 
-#if !defined(MGBA_CORE_INIT_TEST) && !defined(GBA_SD_PROBE_TEST) && \
-    !defined(GBA_SD_ROM_LOAD_TEST) && !defined(GBA_SD_FRAME_TEST) && \
-    !defined(GBA_SD_PERF_TEST)
+/* Optimization level baked into the bench manifest's config field, so -Og
+ * and -O2 runs can never be mixed up in comparisons. From Kconfig. */
+#if defined(CONFIG_COMPILER_OPTIMIZATION_PERF)
+#define GBA_BENCH_OPT "O2"
+#elif defined(CONFIG_COMPILER_OPTIMIZATION_SIZE)
+#define GBA_BENCH_OPT "Os"
+#elif defined(CONFIG_COMPILER_OPTIMIZATION_NONE)
+#define GBA_BENCH_OPT "O0"
+#else
+#define GBA_BENCH_OPT "Og"
+#endif
+
+#if !defined(MGBA_CORE_INIT_TEST) && !defined(GBA_HAS_SD_PATHS) && \
+    !defined(GBA_DISPLAY_TEST) && !defined(GBA_DISPLAY_ANIM_TEST)
 static void emit_console(const char *line, void *ctx) {
     (void)ctx;
     printf("%s\n", line);
 }
 #endif
 
-#if defined(GBA_SD_PROBE_TEST) || defined(GBA_SD_ROM_LOAD_TEST) || \
-    defined(GBA_SD_FRAME_TEST) || defined(GBA_SD_PERF_TEST)
-#define GBA_SD_MOUNT_POINT "/sdcard"
-
+#if defined(GBA_HAS_SD_PATHS)
 static void discard_mgba_log(struct mLogger *logger, int category,
                              enum mLogLevel level, const char *format,
                              va_list args) {
@@ -62,7 +96,7 @@ static struct mLogger quiet_mgba_logger = {
     .filter = NULL,
 };
 
-static esp_err_t gba_sd_mount(sdmmc_card_t **card,
+esp_err_t gba_sd_mount(sdmmc_card_t **card,
                               sd_pwr_ctrl_handle_t *pwr_ctrl) {
     sd_pwr_ctrl_ldo_config_t ldo_config = {.ldo_chan_id = 4};
     *card = NULL;
@@ -99,7 +133,7 @@ static esp_err_t gba_sd_mount(sdmmc_card_t **card,
     return err;
 }
 
-static esp_err_t gba_sd_unmount(sdmmc_card_t *card,
+esp_err_t gba_sd_unmount(sdmmc_card_t *card,
                                 sd_pwr_ctrl_handle_t pwr_ctrl) {
     esp_err_t err = esp_vfs_fat_sdcard_unmount(GBA_SD_MOUNT_POINT, card);
     if (err != ESP_OK) return err;
@@ -108,6 +142,39 @@ static esp_err_t gba_sd_unmount(sdmmc_card_t *card,
 #endif
 
 #ifdef GBA_SD_PROBE_TEST
+/* Log every .gba directly inside `dir_path` and return how many were found.
+ * Read-only: stat only, nothing opened for writing. */
+static unsigned probe_scan_dir(const char *dir_path) {
+    DIR *dir = opendir(dir_path);
+    if (!dir) {
+        ESP_LOGW(TAG, "cannot open %s", dir_path);
+        return 0;
+    }
+    unsigned gba_count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        size_t len = strlen(entry->d_name);
+        if (len < 4 || strcasecmp(entry->d_name + len - 4, ".gba") != 0)
+            continue;
+        char path[256];
+        int n = snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+        if (n < 0 || (size_t)n >= sizeof(path)) {
+            ESP_LOGW(TAG, "skip overlong SD path");
+            continue;
+        }
+        struct stat st;
+        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+            ESP_LOGW(TAG, "cannot stat ROM candidate: %s", path);
+            continue;
+        }
+        ESP_LOGI(TAG, "ROM candidate: %s bytes=%llu", path,
+                 (unsigned long long)st.st_size);
+        ++gba_count;
+    }
+    closedir(dir);
+    return gba_count;
+}
+
 static void app_sd_probe_test(void) {
     ESP_LOGI(TAG, "silent SD read-only probe; formatting is disabled");
     sdmmc_card_t *card = NULL;
@@ -119,35 +186,22 @@ static void app_sd_probe_test(void) {
         return;
     }
 
-    DIR *dir = opendir(GBA_SD_MOUNT_POINT);
-    if (!dir) {
-        ESP_LOGE(TAG, "cannot open SD mount point %s", GBA_SD_MOUNT_POINT);
+    uint64_t total_bytes = 0;
+    uint64_t free_bytes = 0;
+    if (esp_vfs_fat_info(GBA_SD_MOUNT_POINT, &total_bytes, &free_bytes) ==
+        ESP_OK) {
+        ESP_LOGI(TAG, "SD volume: total=%llu MiB free=%llu MiB",
+                 (unsigned long long)(total_bytes >> 20),
+                 (unsigned long long)(free_bytes >> 20));
     } else {
-        struct dirent *entry;
-        unsigned gba_count = 0;
-        while ((entry = readdir(dir)) != NULL) {
-            size_t len = strlen(entry->d_name);
-            if (len < 4 || strcasecmp(entry->d_name + len - 4, ".gba") != 0)
-                continue;
-            char path[256];
-            int n = snprintf(path, sizeof(path), "%s/%s", GBA_SD_MOUNT_POINT,
-                             entry->d_name);
-            if (n < 0 || (size_t)n >= sizeof(path)) {
-                ESP_LOGW(TAG, "skip overlong SD path");
-                continue;
-            }
-            struct stat st;
-            if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
-                ESP_LOGW(TAG, "cannot stat ROM candidate: %s", entry->d_name);
-                continue;
-            }
-            ESP_LOGI(TAG, "ROM candidate: %s bytes=%llu", entry->d_name,
-                     (unsigned long long)st.st_size);
-            ++gba_count;
-        }
-        closedir(dir);
-        ESP_LOGI(TAG, "SD probe complete; gba_files=%u", gba_count);
+        ESP_LOGW(TAG, "cannot read SD volume info");
     }
+
+    /* The ROMs live in gba/; the root is scanned too so a miscopied card is
+     * visible rather than silently reported as empty. */
+    unsigned gba_count = probe_scan_dir(GBA_SD_MOUNT_POINT);
+    gba_count += probe_scan_dir(GBA_SD_MOUNT_POINT "/gba");
+    ESP_LOGI(TAG, "SD probe complete; gba_files=%u", gba_count);
 
     err = gba_sd_unmount(card, pwr_ctrl);
     if (err != ESP_OK) {
@@ -158,39 +212,39 @@ static void app_sd_probe_test(void) {
 }
 #endif
 
-#if defined(GBA_SD_ROM_LOAD_TEST) || defined(GBA_SD_FRAME_TEST) || \
-    defined(GBA_SD_PERF_TEST)
-#define GBA_ROM_PATH \
-    GBA_SD_MOUNT_POINT "/gba/OugonNoTaiyouHirakareshiFuuin.gba"
-#define GBA_ROM_SIZE 8388608u
-#define GBA_ROM_SHA256 \
-    "088bedae4bad8b67e87ff10035a898d3639f3182d486fe5a5d113bab223e0a26"
-#define GBA_FRAME_WIDTH 240u
-#define GBA_FRAME_HEIGHT 160u
-#define GBA_FRAME_PIXELS (GBA_FRAME_WIDTH * GBA_FRAME_HEIGHT)
+#ifdef GBA_HAS_ROM_LOADER
 #ifndef GBA_SD_FRAME_COUNT
 #define GBA_SD_FRAME_COUNT 1
 #endif
 
-static bool load_rom_image(struct VFile *sd_vf, size_t size,
+bool gba_rom_load_image(struct VFile *sd_vf, size_t size,
                            unsigned char *rom, char hex[65]) {
     unsigned char digest[32];
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
     bool ok = mbedtls_sha256_starts(&ctx, 0) == 0;
     size_t total = 0;
+    /* Split read vs hash cost per chunk: the two are interleaved in one pass,
+     * so a single total cannot tell DMA/bounce overhead from hashing. Two
+     * timer reads per 64 KiB iteration are negligible next to the I/O. */
+    uint64_t read_us = 0, hash_us = 0;
     while (ok && total < size) {
         size_t want = size - total;
         if (want > 64 * 1024) want = 64 * 1024;
+        int64_t r0 = esp_timer_get_time();
         ssize_t got = sd_vf->read(sd_vf, rom + total, want);
+        int64_t r1 = esp_timer_get_time();
         if (got <= 0 || (size_t)got > want) {
             ok = false;
             break;
         }
+        read_us += (uint64_t)(r1 - r0);
+        int64_t h0 = esp_timer_get_time();
         if (mbedtls_sha256_update(&ctx, rom + total, (size_t)got) != 0) {
             ok = false;
             break;
         }
+        hash_us += (uint64_t)(esp_timer_get_time() - h0);
         total += (size_t)got;
     }
     unsigned char extra;
@@ -205,6 +259,18 @@ static bool load_rom_image(struct VFile *sd_vf, size_t size,
     for (size_t i = 0; i < sizeof(digest); ++i)
         snprintf(hex + i * 2, 3, "%02x", digest[i]);
     hex[64] = '\0';
+    /* Startup-time attribution (SD/bounce vs hash) plus the buffer alignment
+     * the DMA path cares about: external-RAM DMA needs pointer and size
+     * cache-line aligned (line size from Kconfig), and heap_caps_malloc only
+     * guarantees ~4 B. */
+    ESP_LOGI(TAG,
+             "ROM load: bytes=%u read_ms=%.1f (%.2f MiB/s) hash_ms=%.1f "
+             "buf_mod64=%u cache_line=%u",
+             (unsigned)total, (double)read_us / 1000.0,
+             read_us ? (double)total / (double)read_us / 1.048576 : 0.0,
+             (double)hash_us / 1000.0,
+             (unsigned)((uintptr_t)rom % 64u),
+             (unsigned)CONFIG_CACHE_L2_CACHE_LINE_SIZE);
     return true;
 }
 
@@ -216,6 +282,10 @@ static int compare_u32(const void *left, const void *right) {
 }
 #endif
 
+#endif /* GBA_HAS_ROM_LOADER */
+
+#if defined(GBA_SD_ROM_LOAD_TEST) || defined(GBA_SD_FRAME_TEST) || \
+    defined(GBA_SD_PERF_TEST)
 static void app_sd_rom_load_test(void) {
     const size_t psram_before = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     sdmmc_card_t *card = NULL;
@@ -275,19 +345,24 @@ static void app_sd_rom_load_test(void) {
                  (long)file_size, (unsigned)GBA_ROM_SIZE);
         goto cleanup;
     }
-    rom_image = heap_caps_malloc(GBA_ROM_SIZE,
-                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    rom_image =
+#ifdef GBA_ALIGNED_ROM_ALLOC
+        heap_caps_aligned_alloc(64, GBA_ROM_SIZE,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+        heap_caps_malloc(GBA_ROM_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#endif
     if (!rom_image) {
         ESP_LOGE(TAG, "PSRAM ROM allocation failed: %u bytes",
                  (unsigned)GBA_ROM_SIZE);
         goto cleanup;
     }
     char sha256[65];
-    if (!load_rom_image(sd_vf, GBA_ROM_SIZE, rom_image, sha256)) {
+    if (!gba_rom_load_image(sd_vf, GBA_ROM_SIZE, rom_image, sha256)) {
         ESP_LOGE(TAG, "ROM read/hash failed or file changed during read");
         goto cleanup;
     }
-    ESP_LOGI(TAG, "PSRAM ROM image SHA-256: %s", sha256);
+    ESP_LOGI(TAG, "PSRAM ROM image SHA-256: %s (%s)", sha256, GBA_ROM_LABEL);
     if (strcmp(sha256, GBA_ROM_SHA256) != 0) {
         ESP_LOGE(TAG, "ROM hash mismatch; refusing core load");
         goto cleanup;
@@ -446,6 +521,109 @@ cleanup:
 }
 #endif
 
+#ifdef GBA_DISPLAY_TEST
+static void app_display_test(void) {
+    ESP_LOGI(TAG, "ROM-free fixed-image panel test; no audio/touch/camera/USB");
+    ESP_LOGI(TAG, "PSRAM free before display init: %u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+    esp_err_t err = gba_display_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "display init failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    /* Retained for the lifetime of the test so the panel never points at a
+     * freed buffer. Presented once; cracked static image, no refresh loop. */
+    uint16_t *fb = heap_caps_malloc(GBA_DISPLAY_PIXELS * sizeof(uint16_t),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!fb) {
+        ESP_LOGE(TAG, "PSRAM display buffer allocation failed (%u bytes)",
+                 (unsigned)(GBA_DISPLAY_PIXELS * sizeof(uint16_t)));
+        gba_display_deinit();
+        return;
+    }
+
+    gba_display_fixed_pattern(fb, GBA_DISPLAY_H_RES, GBA_DISPLAY_V_RES);
+    err = gba_display_present_full(fb);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "present failed: %s", esp_err_to_name(err));
+        heap_caps_free(fb);
+        gba_display_deinit();
+        return;
+    }
+
+    /* Only now reveal the panel, so an uninitialised frame is never shown. */
+    err = gba_display_backlight_set(GBA_DISPLAY_BRIGHTNESS_PERCENT);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "backlight set failed: %s", esp_err_to_name(err));
+        heap_caps_free(fb);
+        gba_display_deinit();
+        return;
+    }
+
+    ESP_LOGI(TAG, "fixed image shown at %d%%; holding; psram_free=%u",
+             GBA_DISPLAY_BRIGHTNESS_PERCENT,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+#endif
+
+#ifdef GBA_DISPLAY_ROM_TEST
+static void app_display_rom_test(void) {
+    esp_err_t err = gba_display_rom_test_run();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "display ROM still-frame test failed: %s",
+                 esp_err_to_name(err));
+    }
+}
+#endif
+
+#ifdef GBA_DISPLAY_STREAM_TEST
+static void app_display_stream_test(void) {
+    esp_err_t err = gba_display_stream_test_run();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "display stream test failed: %s", esp_err_to_name(err));
+    }
+}
+#endif
+
+#ifdef GBA_DISPLAY_PPA_STREAM_TEST
+static void app_display_ppa_stream_test(void) {
+    esp_err_t err = gba_display_stream_test_run();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "PPA ROM stream test failed: %s", esp_err_to_name(err));
+    }
+}
+#endif
+
+#ifdef GBA_DISPLAY_PPA_OVERLAP_TEST
+static void app_display_ppa_overlap_test(void) {
+    esp_err_t err = gba_display_stream_test_run();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "PPA overlap test failed: %s", esp_err_to_name(err));
+    }
+}
+#endif
+
+#ifdef GBA_DISPLAY_ANIM_TEST
+static void app_display_anim_test(void) {
+    esp_err_t err = gba_display_anim_test_run();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "display animated pattern test failed: %s",
+                 esp_err_to_name(err));
+    }
+}
+#endif
+
+#ifdef GBA_PPA_BENCH_TEST
+static void app_ppa_bench_test(void) {
+    esp_err_t err = gba_ppa_bench_test_run();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "PPA bench test failed: %s", esp_err_to_name(err));
+    }
+}
+#endif
+
 #ifdef MGBA_CORE_INIT_TEST
 static void app_core_init_test(void) {
     ESP_LOGI(TAG, "silent mGBA core lifecycle test (%d iterations)",
@@ -501,10 +679,24 @@ void app_main(void) {
     app_sd_probe_test();
 #elif defined(MGBA_CORE_INIT_TEST)
     app_core_init_test();
+#elif defined(GBA_DISPLAY_TEST)
+    app_display_test();
+#elif defined(GBA_DISPLAY_ROM_TEST)
+    app_display_rom_test();
+#elif defined(GBA_DISPLAY_STREAM_TEST)
+    app_display_stream_test();
+#elif defined(GBA_DISPLAY_PPA_OVERLAP_TEST)
+    app_display_ppa_overlap_test();
+#elif defined(GBA_DISPLAY_PPA_STREAM_TEST)
+    app_display_ppa_stream_test();
+#elif defined(GBA_DISPLAY_ANIM_TEST)
+    app_display_anim_test();
+#elif defined(GBA_PPA_BENCH_TEST)
+    app_ppa_bench_test();
 #else
     ESP_LOGI(TAG, "gba_bench start (rom-independent)");
     bench_register_all();
-    bench_run_all(emit_console, NULL, "tab5", "idf-default", "local",
+    bench_run_all(emit_console, NULL, "tab5", "idf-" GBA_BENCH_OPT, "local",
                   "none");
     ESP_LOGI(TAG, "gba_bench done; idling");
 #endif

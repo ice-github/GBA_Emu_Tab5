@@ -12,3 +12,7 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_BSP_SD_FORMAT_ON_MOUNT_FAIL=n
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_MAIN_TASK_STACK_SIZE=16384
+# Two DPI frame buffers: continuous display renders into the back buffer and
+# presents it, so the swap happens at a frame boundary (tear-free) and no
+# per-frame DMA2D copy is needed.
+CONFIG_BSP_LCD_DPI_BUFFER_NUMS=2

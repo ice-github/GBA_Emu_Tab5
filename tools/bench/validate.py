@@ -4,6 +4,9 @@ Rejects: missing keys, iters<1, non-finite or misordered stats,
 non-positive throughput, verified!=true, duplicate case ids, empty input.
 A zero checksum is NOT rejected on its own: legit workloads can hash to
 zero. Determinism is proven by the harness "verified" flag instead.
+Additionally, all `scale3x_*` cases must report the same checksum, and all
+`rot45x_*` cases must report the same checksum: each group computes the same
+pixels by different means, so a mismatch means one of the paths is wrong.
 """
 import json
 import math
@@ -21,6 +24,7 @@ def finite(x):
 def main(path=None):
     fh = open(path) if path else sys.stdin
     seen = set()
+    checksums = {}
     n = 0
     for lineno, line in enumerate(fh, 1):
         line = line.strip()
@@ -40,6 +44,7 @@ def main(path=None):
             print(f"line {lineno}: duplicate case {case!r}", file=sys.stderr)
             return 1
         seen.add(case)
+        checksums[case] = r["checksum"]
         if not isinstance(r["iters"], int) or r["iters"] < 1:
             print(f"line {lineno}: bad iters", file=sys.stderr)
             return 1
@@ -63,6 +68,13 @@ def main(path=None):
     if n == 0:
         print("no results", file=sys.stderr)
         return 1
+    for prefix in ("scale3x_", "rot45x_"):
+        variants = {c: cs for c, cs in checksums.items()
+                    if c.startswith(prefix)}
+        if len(set(variants.values())) > 1:
+            print(f"{prefix}variants disagree on output: {variants}",
+                  file=sys.stderr)
+            return 1
     print(f"validate ok: {n} cases")
     return 0
 

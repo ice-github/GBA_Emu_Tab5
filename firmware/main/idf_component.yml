@@ -1,0 +1,17 @@
+## Component manager manifest for the Tab5 firmware.
+##
+## managed_components/ and sdkconfig are gitignored, so board/display support
+## must be declared here to keep a fresh clone buildable. The fully resolved
+## versions are recorded in firmware/dependencies.lock, which is tracked.
+##
+## espressif/m5stack_tab5_noglib is the Tab5 BSP without the LVGL graphical
+## library. The display bring-up path only needs the MIPI-DSI panel drivers,
+## the PI4IOE5V6408 IO expander and the BSP panel init. The full (graphical)
+## BSP would additionally pull lvgl + esp_lvgl_port, and the esp_lvgl_port
+## release resolved for this IDF (2.9.0) uses an IDF 6.x-only DSI callback
+## member (on_frame_buf_complete), so it does not compile against IDF 5.5.4.
+dependencies:
+  idf:
+    version: ">=5.4"
+  espressif/m5stack_tab5_noglib:
+    version: "1.3.2"
